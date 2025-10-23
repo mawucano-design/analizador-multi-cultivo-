@@ -33,7 +33,7 @@ with st.sidebar:
     nutriente = st.selectbox("Nutriente:", ["NITRÓGENO", "FÓSFORO", "POTASIO"])
     
     st.subheader("🎯 División de Parcela")
-    n_divisiones = st.slider("Número de zonas de manejo:", min_value=4, max_value=16, value=8)
+    n_divisiones = st.slider("Número de zonas de manejo:", min_value=16, max_value=48, value=32)
     
     st.subheader("📤 Subir Parcela")
     uploaded_zip = st.file_uploader("Subir ZIP con shapefile de tu parcela", type=['zip'])
