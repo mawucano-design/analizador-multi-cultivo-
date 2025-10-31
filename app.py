@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -18,6 +19,7 @@ import requests
 import warnings
 warnings.filterwarnings('ignore')
 
+# Configuración de página
 st.set_page_config(page_title="🌱 Analizador Multi-Cultivo GEE", layout="wide")
 st.title("🌱 ANALIZADOR MULTI-CULTIVO - METODOLOGÍA GEE + SENTINEL 2")
 st.markdown("---")
@@ -29,10 +31,17 @@ os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 # CONFIGURACIÓN SENTINEL HUB
 # =============================================================================
 
-SENTINEL_HUB_CREDENTIALS = {
-    "client_id": "b296cf70-c9d2-4e69-91f4-f7be80b99ed1",
-    "client_secret": "358474d6-2326-4637-bf8e-30a709b2d6a6"
-}
+# Credenciales con manejo seguro de secrets
+try:
+    SENTINEL_HUB_CREDENTIALS = {
+        "client_id": st.secrets.get("SENTINEL_HUB_CLIENT_ID", "b296cf70-c9d2-4e69-91f4-f7be80b99ed1"),
+        "client_secret": st.secrets.get("SENTINEL_HUB_CLIENT_SECRET", "358474d6-2326-4637-bf8e-30a709b2d6a6")
+    }
+except:
+    SENTINEL_HUB_CREDENTIALS = {
+        "client_id": "b296cf70-c9d2-4e69-91f4-f7be80b99ed1",
+        "client_secret": "358474d6-2326-4637-bf8e-30a709b2d6a6"
+    }
 
 class SentinelHubConfig:
     """Maneja la configuración de Sentinel Hub"""
@@ -87,7 +96,6 @@ class SentinelHubConfig:
 
 # Inicializar configuración
 sh_config = SentinelHubConfig()
-sh_configured = sh_config.check_configuration()
 
 # =============================================================================
 # MAPAS BASE ESRI
@@ -117,72 +125,7 @@ MAPAS_BASE = {
 }
 
 # =============================================================================
-# SIDEBAR MEJORADO
-# =============================================================================
-
-with st.sidebar:
-    st.header("⚙️ Configuración")
-    
-    # Configuración Sentinel Hub
-    st.subheader("🛰️ Sentinel Hub")
-    
-    if not sh_configured:
-        st.error("❌ Sentinel Hub no configurado")
-        with st.expander("🔐 Configurar Sentinel Hub"):
-            st.markdown("""
-            **Para datos Sentinel 2 reales:**
-            1. **Crear cuenta:** [Sentinel Hub](https://www.sentinel-hub.com/)
-            2. **Obtener credenciales** (Client ID y Client Secret)
-            """)
-            
-            sh_client_id = st.text_input("Client ID:", type="password")
-            sh_client_secret = st.text_input("Client Secret:", type="password")
-            
-            if st.button("💾 Guardar Credenciales"):
-                if sh_client_id and sh_client_secret:
-                    st.session_state.sh_client_id = sh_client_id
-                    st.session_state.sh_client_secret = sh_client_secret
-                    st.session_state.sh_configured = True
-                    st.success("✅ Credenciales guardadas")
-                    st.rerun()
-                else:
-                    st.error("❌ Ingresa ambas credenciales")
-    else:
-        st.success(sh_config.config_message)
-    
-    # Configuración de cultivo
-    cultivo = st.selectbox("Cultivo:", 
-                          ["TRIGO", "MAÍZ", "SOJA", "SORGO", "GIRASOL"])
-    
-    analisis_tipo = st.selectbox("Tipo de Análisis:", 
-                               ["FERTILIDAD ACTUAL", "RECOMENDACIONES NPK"])
-    
-    nutriente = st.selectbox("Nutriente:", ["NITRÓGENO", "FÓSFORO", "POTASIO"])
-    
-    # Configuración temporal para Sentinel 2
-    st.subheader("📅 Imagen Satelital")
-    fecha_imagen = st.date_input(
-        "Fecha de imagen Sentinel 2:",
-        value=datetime.now() - timedelta(days=30),
-        max_value=datetime.now(),
-        help="Selecciona la fecha para la imagen satelital (máximo 30 días atrás para mejor disponibilidad)"
-    )
-    
-    st.subheader("🗺️ Mapa Base")
-    mapa_base = st.selectbox(
-        "Seleccionar mapa base:",
-        list(MAPAS_BASE.keys()),
-        index=0
-    )
-    
-    st.subheader("🎯 División de Parcela")
-    n_divisiones = st.slider("Número de zonas de manejo:", min_value=16, max_value=48, value=32)
-    
-    st.subheader("📤 Subir Parcela")
-    uploaded_zip = st.file_uploader("Subir ZIP con shapefile de tu parcela", type=['zip'])
-
-# =============================================================================
-# PARÁMETROS GEE POR CULTIVO (ORIGINAL)
+# PARÁMETROS GEE POR CULTIVO
 # =============================================================================
 
 PARAMETROS_CULTIVOS = {
@@ -356,10 +299,10 @@ class SentinelHubProcessor:
             wkt_geometry = geometry.wkt
             
             # Parámetros específicos del cultivo
-            params = PARAMETROS_CULTIVOS[cultivo]
+            params_cultivo = PARAMETROS_CULTIVOS[cultivo]
             
             # Crear request para múltiples índices
-            params = {
+            request_params = {
                 'service': 'WMS',
                 'request': 'GetMap',
                 'layers': 'TRUE-COLOR-S2-L2A',
@@ -465,10 +408,11 @@ class SentinelHubProcessor:
             }
 
 # =============================================================================
-# FUNCIONES ORIGINALES DEL ANÁLISIS MULTICULTIVO (MODIFICADAS)
+# FUNCIONES BÁSICAS DEL ANÁLISIS MULTICULTIVO
 # =============================================================================
 
 def calcular_superficie(gdf):
+    """Calcula superficie en hectáreas"""
     try:
         if gdf.crs and gdf.crs.is_geographic:
             area_m2 = gdf.geometry.area * 10000000000
@@ -479,6 +423,7 @@ def calcular_superficie(gdf):
         return gdf.geometry.area / 10000
 
 def dividir_parcela_en_zonas(gdf, n_zonas):
+    """Divide la parcela en zonas de manejo"""
     if len(gdf) == 0:
         return gdf
     
@@ -622,7 +567,6 @@ def calcular_indices_satelitales_gee(gdf, cultivo, usar_sentinel2=True):
     
     return resultados
 
-# Las funciones restantes se mantienen igual...
 def calcular_recomendaciones_npk_gee(indices, nutriente, cultivo):
     """Calcula recomendaciones NPK basadas en la metodología GEE específica por cultivo"""
     recomendaciones = []
@@ -732,10 +676,37 @@ def crear_mapa_gee(gdf, nutriente, analisis_tipo, cultivo):
         return None
 
 # =============================================================================
-# FUNCIÓN PRINCIPAL MEJORADA CON MAPAS ESRI
+# FUNCIONES AUXILIARES
+# =============================================================================
+
+def get_fuente_nitrogeno(cultivo):
+    """Obtiene la fuente de nitrógeno recomendada por cultivo"""
+    fuentes = {
+        'TRIGO': 'Nitrato de amonio',
+        'MAÍZ': 'Urea + Nitrato de amonio', 
+        'SOJA': 'Fosfato diamónico (contiene N)',
+        'SORGO': 'Urea',
+        'GIRASOL': 'Nitrato de amonio'
+    }
+    return fuentes.get(cultivo, 'Urea')
+
+def get_fertilizante_balanceado(cultivo):
+    """Obtiene el fertilizante balanceado recomendado por cultivo"""
+    fertilizantes = {
+        'TRIGO': '15-15-15 o 20-20-0',
+        'MAÍZ': '17-17-17 o 20-10-10',
+        'SOJA': '5-20-20 o 0-20-20',
+        'SORGO': '12-24-12 o 10-20-10',
+        'GIRASOL': '8-15-30 o 10-10-20'
+    }
+    return fertilizantes.get(cultivo, 'Fertilizante complejo balanceado')
+
+# =============================================================================
+# FUNCIÓN PRINCIPAL DE ANÁLISIS
 # =============================================================================
 
 def analisis_gee_completo(gdf, nutriente, analisis_tipo, n_divisiones, cultivo):
+    """Función principal que ejecuta el análisis completo"""
     try:
         st.header(f"{ICONOS_CULTIVOS[cultivo]} ANÁLISIS {cultivo} - METODOLOGÍA GEE + SENTINEL 2")
         
@@ -940,7 +911,7 @@ def analisis_gee_completo(gdf, nutriente, analisis_tipo, n_divisiones, cultivo):
             
             folium_static(mapa_resultados, width=900, height=500)
         
-        # MAPA GEE TRADICIONAL (se mantiene igual)
+        # MAPA GEE TRADICIONAL
         st.subheader("🎨 MAPA GEE TRADICIONAL")
         mapa_buffer = crear_mapa_gee(gdf_analizado, nutriente, analisis_tipo, cultivo)
         if mapa_buffer:
@@ -953,7 +924,7 @@ def analisis_gee_completo(gdf, nutriente, analisis_tipo, n_divisiones, cultivo):
                 "image/png"
             )
         
-        # El resto del código se mantiene igual (tablas, recomendaciones, descargas)...
+        # TABLA DE ÍNDICES
         st.subheader("🔬 ÍNDICES SATELITALES POR ZONA")
         
         columnas_indices = ['id_zona', 'npk_actual', 'materia_organica', 'ndvi', 'ndre', 'humedad_suelo', 'categoria']
@@ -1068,28 +1039,78 @@ def analisis_gee_completo(gdf, nutriente, analisis_tipo, n_divisiones, cultivo):
         st.error(f"Detalle: {traceback.format_exc()}")
         return False
 
-# FUNCIONES AUXILIARES (se mantienen igual)
-def get_fuente_nitrogeno(cultivo):
-    fuentes = {
-        'TRIGO': 'Nitrato de amonio',
-        'MAÍZ': 'Urea + Nitrato de amonio', 
-        'SOJA': 'Fosfato diamónico (contiene N)',
-        'SORGO': 'Urea',
-        'GIRASOL': 'Nitrato de amonio'
-    }
-    return fuentes.get(cultivo, 'Urea')
+# =============================================================================
+# SIDEBAR MEJORADO
+# =============================================================================
 
-def get_fertilizante_balanceado(cultivo):
-    fertilizantes = {
-        'TRIGO': '15-15-15 o 20-20-0',
-        'MAÍZ': '17-17-17 o 20-10-10',
-        'SOJA': '5-20-20 o 0-20-20',
-        'SORGO': '12-24-12 o 10-20-10',
-        'GIRASOL': '8-15-30 o 10-10-20'
-    }
-    return fertilizantes.get(cultivo, 'Fertilizante complejo balanceado')
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    
+    # Configuración temporal para Sentinel 2
+    st.subheader("📅 Imagen Satelital")
+    fecha_imagen = st.date_input(
+        "Fecha de imagen Sentinel 2:",
+        value=datetime.now() - timedelta(days=30),
+        max_value=datetime.now(),
+        help="Selecciona la fecha para la imagen satelital (máximo 30 días atrás para mejor disponibilidad)"
+    )
+    
+    st.subheader("🗺️ Mapa Base")
+    mapa_base = st.selectbox(
+        "Seleccionar mapa base:",
+        list(MAPAS_BASE.keys()),
+        index=0
+    )
+    
+    # Configuración Sentinel Hub
+    st.subheader("🛰️ Sentinel Hub")
+    
+    # Inicializar configuración aquí para que las variables estén disponibles
+    sh_configured = sh_config.check_configuration()
+    
+    if not sh_configured:
+        st.error("❌ Sentinel Hub no configurado")
+        with st.expander("🔐 Configurar Sentinel Hub"):
+            st.markdown("""
+            **Para datos Sentinel 2 reales:**
+            1. **Crear cuenta:** [Sentinel Hub](https://www.sentinel-hub.com/)
+            2. **Obtener credenciales** (Client ID y Client Secret)
+            """)
+            
+            sh_client_id = st.text_input("Client ID:", type="password")
+            sh_client_secret = st.text_input("Client Secret:", type="password")
+            
+            if st.button("💾 Guardar Credenciales"):
+                if sh_client_id and sh_client_secret:
+                    st.session_state.sh_client_id = sh_client_id
+                    st.session_state.sh_client_secret = sh_client_secret
+                    st.session_state.sh_configured = True
+                    st.success("✅ Credenciales guardadas")
+                    st.rerun()
+                else:
+                    st.error("❌ Ingresa ambas credenciales")
+    else:
+        st.success(sh_config.config_message)
+    
+    # Configuración de cultivo
+    cultivo = st.selectbox("Cultivo:", 
+                          ["TRIGO", "MAÍZ", "SOJA", "SORGO", "GIRASOL"])
+    
+    analisis_tipo = st.selectbox("Tipo de Análisis:", 
+                               ["FERTILIDAD ACTUAL", "RECOMENDACIONES NPK"])
+    
+    nutriente = st.selectbox("Nutriente:", ["NITRÓGENO", "FÓSFORO", "POTASIO"])
+    
+    st.subheader("🎯 División de Parcela")
+    n_divisiones = st.slider("Número de zonas de manejo:", min_value=16, max_value=48, value=32)
+    
+    st.subheader("📤 Subir Parcela")
+    uploaded_zip = st.file_uploader("Subir ZIP con shapefile de tu parcela", type=['zip'])
 
-# INTERFAZ PRINCIPAL MEJORADA
+# =============================================================================
+# INTERFAZ PRINCIPAL
+# =============================================================================
+
 if uploaded_zip:
     with st.spinner("Cargando parcela..."):
         try:
