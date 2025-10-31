@@ -1,3 +1,4 @@
+
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -10,262 +11,29 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import LinearSegmentedColormap
 import io
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon
 import math
-import json
-import folium
-from streamlit_folium import folium_static
-import requests
 import warnings
 warnings.filterwarnings('ignore')
 
+# Importar módulos personalizados
+from src.data_processor import (
+    PARAMETROS_CULTIVOS, ICONOS_CULTIVOS, PALETAS_GEE,
+    calcular_superficie, dividir_parcela_en_zonas,
+    calcular_indices_satelitales_gee_mejorado, calcular_recomendaciones_npk_gee,
+    get_fuente_nitrogeno, get_fertilizante_balanceado
+)
+from src.map_utils import crear_mapa_interactivo_gee, MAPAS_BASE
+from streamlit_folium import folium_static
+
 st.set_page_config(page_title="🌱 Analizador Multi-Cultivo", layout="wide")
-st.title("🌱 ANALIZADOR MULTI-CULTIVO - METODOLOGÍA GEE")
+st.title("🌱 ANALIZADOR MULTI-CULTIVO - METODOLOGÍA GEE + SENTINEL-2")
 st.markdown("---")
 
 # Configurar para restaurar .shx automáticamente
 os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 
-# =============================================================================
-# MAPAS BASE ESRI (INTEGRADO DEL SEGUNDO CÓDIGO)
-# =============================================================================
-
-MAPAS_BASE = {
-    "ESRI World Imagery": {
-        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        "attribution": "Esri, Maxar, Earthstar Geographics",
-        "name": "ESRI Satellite"
-    },
-    "ESRI World Street Map": {
-        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-        "attribution": "Esri, HERE, Garmin",
-        "name": "ESRI Streets"
-    },
-    "OpenStreetMap": {
-        "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "attribution": "OpenStreetMap contributors",
-        "name": "OSM"
-    },
-    "CartoDB Positron": {
-        "url": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-        "attribution": "CartoDB",
-        "name": "CartoDB Light"
-    }
-}
-
-# =============================================================================
-# CONFIGURACIÓN SENTINEL HUB (VERSIÓN SIMPLIFICADA)
-# =============================================================================
-
-class SentinelHubProcessor:
-    """Procesador de datos Sentinel-2 Harmonizados"""
-    
-    def __init__(self):
-        self.base_url = "https://services.sentinel-hub.com/ogc/wms/"
-        
-    def get_sentinel2_data(self, geometry, fecha, bbox, width=512, height=512):
-        """Obtiene datos de Sentinel-2 Harmonizados para una geometría"""
-        try:
-            # Simular datos Sentinel-2 L2A (atmosféricamente corregido)
-            # En una implementación real, aquí iría la conexión a Sentinel Hub
-            return self._simulate_sentinel2_response(geometry)
-            
-        except Exception as e:
-            st.error(f"Error obteniendo datos Sentinel-2: {e}")
-            return None
-    
-    def _simulate_sentinel2_response(self, geometry):
-        """Simula respuesta de Sentinel-2 Harmonizado (10m resolución)"""
-        try:
-            # Simular datos realistas de Sentinel-2 L2A
-            centroid = geometry.centroid
-            x_norm = (centroid.x * 100) % 1
-            y_norm = (centroid.y * 100) % 1
-            
-            # Patrones espaciales realistas para cultivos
-            if x_norm < 0.2 or y_norm < 0.2:
-                ndvi = 0.15 + np.random.normal(0, 0.03)  # Bordes - suelo
-            elif x_norm > 0.7 and y_norm > 0.7:
-                ndvi = 0.78 + np.random.normal(0, 0.02)  # Esquina - vegetación densa
-            else:
-                ndvi = 0.52 + np.random.normal(0, 0.04)  # Centro - vegetación media
-            
-            # Datos Sentinel-2 L2A simulados
-            datos_sentinel = {
-                'ndvi': max(0.1, min(0.85, ndvi)),
-                'ndre': max(0.05, min(0.7, ndvi * 0.8 + np.random.normal(0, 0.03))),
-                'red_edge': 0.3 + (ndvi * 0.5) + np.random.normal(0, 0.02),
-                'swir': 0.2 + np.random.normal(0, 0.05),  # Banda SWIR para humedad
-                'nir': 0.4 + (ndvi * 0.3) + np.random.normal(0, 0.03),
-                'resolucion': '10m',  # Resolución harmonizada
-                'procesamiento': 'L2A',  # Nivel 2A - corrección atmosférica
-                'fuente': 'Sentinel-2 Harmonized'
-            }
-            
-            return datos_sentinel
-            
-        except:
-            # Valores por defecto en caso de error
-            return {
-                'ndvi': 0.5,
-                'ndre': 0.3,
-                'red_edge': 0.35,
-                'swir': 0.25,
-                'nir': 0.45,
-                'resolucion': '10m',
-                'procesamiento': 'L2A',
-                'fuente': 'Simulado'
-            }
-
-# =============================================================================
-# FUNCIONES DE VISUALIZACIÓN CON MAPAS BASE ESRI
-# =============================================================================
-
-def crear_mapa_base(gdf, mapa_seleccionado="ESRI World Imagery", zoom_start=14):
-    """Crea un mapa base con el estilo seleccionado"""
-    
-    # Calcular centro del mapa
-    bounds = gdf.total_bounds
-    center_lat = (bounds[1] + bounds[3]) / 2
-    center_lon = (bounds[0] + bounds[2]) / 2
-    
-    # Crear mapa
-    m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=zoom_start,
-        tiles=None,
-        control_scale=True,
-        zoom_control=True
-    )
-    
-    # Añadir capas base
-    for nombre, config in MAPAS_BASE.items():
-        folium.TileLayer(
-            tiles=config["url"],
-            attr=config["attribution"],
-            name=config["name"],
-            control=True,
-            show=(nombre == mapa_seleccionado)
-        ).add_to(m)
-    
-    return m
-
-def crear_mapa_interactivo_gee(gdf, nutriente, analisis_tipo, cultivo, mapa_base="ESRI World Imagery"):
-    """Crea mapa interactivo con datos GEE y base ESRI"""
-    
-    m = crear_mapa_base(gdf, mapa_base, zoom_start=14)
-    
-    # Determinar columna y valores según el tipo de análisis
-    if analisis_tipo == "FERTILIDAD ACTUAL":
-        columna = 'npk_actual'
-        titulo_leyenda = '🌱 Índice NPK Actual'
-        vmin, vmax = 0, 1
-    else:
-        columna = 'valor_recomendado'
-        params = PARAMETROS_CULTIVOS[cultivo]
-        if nutriente == "NITRÓGENO":
-            titulo_leyenda = '🎯 Recomendación Nitrógeno (kg/ha)'
-            vmin, vmax = (params['NITROGENO']['min'] * 0.8, params['NITROGENO']['max'] * 1.2)
-        elif nutriente == "FÓSFORO":
-            titulo_leyenda = '🎯 Recomendación Fósforo (kg/ha)'
-            vmin, vmax = (params['FOSFORO']['min'] * 0.8, params['FOSFORO']['max'] * 1.2)
-        else:
-            titulo_leyenda = '🎯 Recomendación Potasio (kg/ha)'
-            vmin, vmax = (params['POTASIO']['min'] * 0.8, params['POTASIO']['max'] * 1.2)
-    
-    # Función para estilo dinámico
-    def estilo_poligono(feature):
-        valor = feature['properties'].get(columna, 0)
-        if valor is None:
-            return {'fillColor': 'gray', 'color': 'black', 'weight': 1, 'fillOpacity': 0.3}
-        
-        # Normalizar valor para color
-        valor_norm = (valor - vmin) / (vmax - vmin)
-        valor_norm = max(0, min(1, valor_norm))
-        
-        # Seleccionar paleta según análisis
-        if analisis_tipo == "FERTILIDAD ACTUAL":
-            colores = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#d9ef8b', '#a6d96a', '#66bd63', '#1a9850']
-        elif nutriente == "NITRÓGENO":
-            colores = ['#00ff00', '#80ff00', '#ffff00', '#ff8000', '#ff0000']
-        elif nutriente == "FÓSFORO":
-            colores = ['#0000ff', '#4040ff', '#8080ff', '#c0c0ff', '#ffffff']
-        else:
-            colores = ['#4B0082', '#6A0DAD', '#8A2BE2', '#9370DB', '#D8BFD8']
-        
-        # Interpolar color
-        n_colores = len(colores)
-        idx = int(valor_norm * (n_colores - 1))
-        idx = min(idx, n_colores - 2)  # Asegurar que no exceda
-        color = colores[idx]
-        
-        return {
-            'fillColor': color,
-            'color': 'black',
-            'weight': 2,
-            'fillOpacity': 0.7,
-            'opacity': 0.8
-        }
-    
-    # Agregar capa de resultados GEE
-    folium.GeoJson(
-        gdf.__geo_interface__,
-        name=f'Análisis {cultivo}',
-        style_function=estilo_poligono,
-        tooltip=folium.GeoJsonTooltip(
-            fields=['id_zona', columna, 'area_ha', 'ndvi', 'materia_organica'],
-            aliases=['Zona:', f'{analisis_tipo}:', 'Área (ha):', 'NDVI:', 'Materia Org (%):'],
-            localize=True,
-            style="background-color: white; border: 1px solid black; border-radius: 3px; padding: 5px;"
-        )
-    ).add_to(m)
-    
-    # Control de capas
-    folium.LayerControl().add_to(m)
-    
-    return m
-
-def crear_leyenda_html(titulo, colores, valores, unidades=""):
-    """Crea una leyenda HTML para el mapa"""
-    
-    leyenda_html = f'''
-    <div style="position: fixed; 
-                top: 10px; right: 10px; width: 280px; 
-                background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:12px; padding: 10px; border-radius: 5px;
-                box-shadow: 0 0 10px rgba(0,0,0,0.2);">
-        <div style="font-weight: bold; margin-bottom: 8px; text-align: center; font-size: 14px;">
-            {titulo}
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 4px;">
-    '''
-    
-    for i in range(len(colores)):
-        if i < len(valores) - 1:
-            leyenda_html += f'''
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-                <div style="width: 25px; height: 18px; background: {colores[i]}; border: 1px solid #000; margin-right: 10px;"></div>
-                <span style="flex-grow: 1;">{valores[i]} - {valores[i+1]}{unidades}</span>
-            </div>
-            '''
-        else:
-            leyenda_html += f'''
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-                <div style="width: 25px; height: 18px; background: {colores[i]}; border: 1px solid #000; margin-right: 10px;"></div>
-                <span style="flex-grow: 1;">> {valores[i]}{unidades}</span>
-            </div>
-            '''
-    
-    leyenda_html += '''
-        </div>
-    </div>
-    '''
-    return leyenda_html
-
-# =============================================================================
-# SIDEBAR MEJORADO
-# =============================================================================
-
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Configuración")
     
@@ -277,13 +45,6 @@ with st.sidebar:
     
     nutriente = st.selectbox("Nutriente:", ["NITRÓGENO", "FÓSFORO", "POTASIO"])
     
-    st.subheader("🗺️ Configuración Mapa")
-    mapa_base = st.selectbox(
-        "Mapa Base:",
-        list(MAPAS_BASE.keys()),
-        index=0  # ESRI World Imagery como default
-    )
-    
     st.subheader("🛰️ Datos Sentinel-2")
     usar_sentinel = st.checkbox("Usar datos Sentinel-2 Harmonizados", value=True)
     fecha_imagen = st.date_input(
@@ -293,251 +54,95 @@ with st.sidebar:
         help="Selecciona la fecha para análisis satelital"
     )
     
+    st.subheader("🗺️ Mapa Base")
+    mapa_base = st.selectbox(
+        "Seleccionar mapa base:",
+        list(MAPAS_BASE.keys()),
+        index=0
+    )
+    
     st.subheader("🎯 División de Parcela")
     n_divisiones = st.slider("Número de zonas de manejo:", min_value=16, max_value=48, value=32)
     
     st.subheader("📤 Subir Parcela")
     uploaded_zip = st.file_uploader("Subir ZIP con shapefile de tu parcela", type=['zip'])
 
-# =============================================================================
-# PARÁMETROS GEE POR CULTIVO (MANTENIDO DEL PRIMER CÓDIGO)
-# =============================================================================
-
-PARAMETROS_CULTIVOS = {
-    'TRIGO': {
-        'NITROGENO': {'min': 120, 'max': 180},
-        'FOSFORO': {'min': 40, 'max': 60},
-        'POTASIO': {'min': 80, 'max': 120},
-        'MATERIA_ORGANICA_OPTIMA': 3.5,
-        'HUMEDAD_OPTIMA': 0.25,
-        'NDVI_OPTIMO': 0.7,
-        'NDRE_OPTIMO': 0.4
-    },
-    'MAÍZ': {
-        'NITROGENO': {'min': 150, 'max': 220},
-        'FOSFORO': {'min': 50, 'max': 70},
-        'POTASIO': {'min': 100, 'max': 140},
-        'MATERIA_ORGANICA_OPTIMA': 4.0,
-        'HUMEDAD_OPTIMA': 0.3,
-        'NDVI_OPTIMO': 0.75,
-        'NDRE_OPTIMO': 0.45
-    },
-    'SOJA': {
-        'NITROGENO': {'min': 80, 'max': 120},
-        'FOSFORO': {'min': 35, 'max': 50},
-        'POTASIO': {'min': 90, 'max': 130},
-        'MATERIA_ORGANICA_OPTIMA': 3.8,
-        'HUMEDAD_OPTIMA': 0.28,
-        'NDVI_OPTIMO': 0.65,
-        'NDRE_OPTIMO': 0.35
-    },
-    'SORGO': {
-        'NITROGENO': {'min': 100, 'max': 150},
-        'FOSFORO': {'min': 30, 'max': 45},
-        'POTASIO': {'min': 70, 'max': 100},
-        'MATERIA_ORGANICA_OPTIMA': 3.0,
-        'HUMEDAD_OPTIMA': 0.22,
-        'NDVI_OPTIMO': 0.6,
-        'NDRE_OPTIMO': 0.3
-    },
-    'GIRASOL': {
-        'NITROGENO': {'min': 90, 'max': 130},
-        'FOSFORO': {'min': 25, 'max': 40},
-        'POTASIO': {'min': 80, 'max': 110},
-        'MATERIA_ORGANICA_OPTIMA': 3.2,
-        'HUMEDAD_OPTIMA': 0.26,
-        'NDVI_OPTIMO': 0.55,
-        'NDRE_OPTIMO': 0.25
-    }
-}
-
-# ICONOS Y COLORES POR CULTIVO
-ICONOS_CULTIVOS = {
-    'TRIGO': '🌾',
-    'MAÍZ': '🌽', 
-    'SOJA': '🫘',
-    'SORGO': '🌾',
-    'GIRASOL': '🌻'
-}
-
-# =============================================================================
-# FUNCIONES MEJORADAS CON SENTINEL-2
-# =============================================================================
-
-def calcular_indices_satelitales_gee_mejorado(gdf, cultivo, usar_sentinel=True, fecha_imagen=None):
-    """
-    Implementa la metodología completa de Google Earth Engine con Sentinel-2 Harmonizado
-    """
-    
-    n_poligonos = len(gdf)
-    resultados = []
-    
-    # Inicializar procesador Sentinel-2
-    processor = SentinelHubProcessor()
-    
-    # Obtener bbox del área total
-    bounds = gdf.total_bounds
-    bbox = [bounds[0], bounds[1], bounds[2], bounds[3]]
-    
-    # Obtener centroides para gradiente espacial
-    gdf_centroids = gdf.copy()
-    gdf_centroids['centroid'] = gdf_centroids.geometry.centroid
-    gdf_centroids['x'] = gdf_centroids.centroid.x
-    gdf_centroids['y'] = gdf_centroids.centroid.y
-    
-    x_coords = gdf_centroids['x'].tolist()
-    y_coords = gdf_centroids['y'].tolist()
-    
-    x_min, x_max = min(x_coords), max(x_coords)
-    y_min, y_max = min(y_coords), max(y_coords)
-    
-    # Parámetros específicos del cultivo
-    params = PARAMETROS_CULTIVOS[cultivo]
-    
-    for idx, row in gdf_centroids.iterrows():
-        # Obtener datos Sentinel-2 si está habilitado
-        datos_sentinel = None
-        if usar_sentinel and fecha_imagen:
-            datos_sentinel = processor.get_sentinel2_data(
-                row.geometry, fecha_imagen, bbox
-            )
-        
-        # Normalizar posición para simular variación espacial
-        x_norm = (row['x'] - x_min) / (x_max - x_min) if x_max != x_min else 0.5
-        y_norm = (row['y'] - y_min) / (y_max - y_min) if y_max != y_min else 0.5
-        
-        patron_espacial = (x_norm * 0.6 + y_norm * 0.4)
-        
-        # Usar datos Sentinel-2 si están disponibles, sino simular
-        if datos_sentinel and datos_sentinel['fuente'] == 'Sentinel-2 Harmonized':
-            # Datos reales de Sentinel-2
-            ndvi = datos_sentinel['ndvi']
-            ndre = datos_sentinel['ndre']
-            fuente = "Sentinel-2 L2A"
-            
-            # Calcular materia orgánica basada en SWIR (banda 11 - 1610 nm)
-            swir = datos_sentinel.get('swir', 0.2)
-            materia_organica = params['MATERIA_ORGANICA_OPTIMA'] * (0.7 + swir * 0.6)
-            
-            # Calcular humedad basada en NIR y SWIR
-            nir = datos_sentinel.get('nir', 0.4)
-            humedad_suelo = params['HUMEDAD_OPTIMA'] * (0.8 + (nir - swir) * 0.4)
-            
-        else:
-            # Simulación (mantener lógica original como fallback)
-            fuente = "Simulado"
-            
-            # 1. MATERIA ORGÁNICA - Adaptada por cultivo
-            base_mo = params['MATERIA_ORGANICA_OPTIMA'] * 0.7
-            variabilidad_mo = patron_espacial * (params['MATERIA_ORGANICA_OPTIMA'] * 0.6)
-            materia_organica = base_mo + variabilidad_mo + np.random.normal(0, 0.2)
-            
-            # 2. HUMEDAD SUELO - Adaptada por requerimientos del cultivo
-            base_humedad = params['HUMEDAD_OPTIMA'] * 0.8
-            variabilidad_humedad = patron_espacial * (params['HUMEDAD_OPTIMA'] * 0.4)
-            humedad_suelo = base_humedad + variabilidad_humedad + np.random.normal(0, 0.05)
-            
-            # 3. NDVI - Específico por cultivo
-            ndvi_base = params['NDVI_OPTIMO'] * 0.6
-            ndvi_variacion = patron_espacial * (params['NDVI_OPTIMO'] * 0.5)
-            ndvi = ndvi_base + ndvi_variacion + np.random.normal(0, 0.06)
-            
-            # 4. NDRE - Específico por cultivo
-            ndre_base = params['NDRE_OPTIMO'] * 0.7
-            ndre_variacion = patron_espacial * (params['NDRE_OPTIMO'] * 0.4)
-            ndre = ndre_base + ndre_variacion + np.random.normal(0, 0.04)
-        
-        # Asegurar límites
-        materia_organica = max(0.5, min(8.0, materia_organica))
-        humedad_suelo = max(0.1, min(0.8, humedad_suelo))
-        ndvi = max(0.1, min(0.9, ndvi))
-        ndre = max(0.05, min(0.7, ndre))
-        
-        # 5. ÍNDICE NPK ACTUAL - Fórmula mejorada con Sentinel-2
-        npk_actual = (ndvi * 0.35) + (ndre * 0.35) + ((materia_organica / 8) * 0.2) + (humedad_suelo * 0.1)
-        npk_actual = max(0, min(1, npk_actual))
-        
-        resultados.append({
-            'materia_organica': round(materia_organica, 2),
-            'humedad_suelo': round(humedad_suelo, 3),
-            'ndvi': round(ndvi, 3),
-            'ndre': round(ndre, 3),
-            'npk_actual': round(npk_actual, 3),
-            'fuente_datos': fuente,
-            'resolucion': datos_sentinel['resolucion'] if datos_sentinel else '10m simulado',
-            'procesamiento': datos_sentinel['procesamiento'] if datos_sentinel else 'L2A simulado'
-        })
-    
-    return resultados
-
-# =============================================================================
-# FUNCIONES ORIGINALES MANTENIDAS (CON PEQUEÑAS MEJORAS)
-# =============================================================================
-
-def calcular_superficie(gdf):
+# FUNCIÓN PARA CREAR MAPA GEE (Matplotlib - Original)
+def crear_mapa_gee(gdf, nutriente, analisis_tipo, cultivo):
+    """Crea mapa con la metodología y paletas de Google Earth Engine"""
     try:
-        if gdf.crs and gdf.crs.is_geographic:
-            area_m2 = gdf.geometry.area * 10000000000
+        fig, ax = plt.subplots(1, 1, figsize=(14, 10))
+        
+        # Seleccionar paleta según el análisis
+        if analisis_tipo == "FERTILIDAD ACTUAL":
+            cmap = LinearSegmentedColormap.from_list('fertilidad_gee', PALETAS_GEE['FERTILIDAD'])
+            vmin, vmax = 0, 1
+            columna = 'npk_actual'
+            titulo_sufijo = 'Índice NPK Actual (0-1)'
         else:
-            area_m2 = gdf.geometry.area
-        return area_m2 / 10000
-    except:
-        return gdf.geometry.area / 10000
-
-def dividir_parcela_en_zonas(gdf, n_zonas):
-    if len(gdf) == 0:
-        return gdf
-    
-    parcela_principal = gdf.iloc[0].geometry
-    bounds = parcela_principal.bounds
-    minx, miny, maxx, maxy = bounds
-    
-    sub_poligonos = []
-    
-    n_cols = math.ceil(math.sqrt(n_zonas))
-    n_rows = math.ceil(n_zonas / n_cols)
-    
-    width = (maxx - minx) / n_cols
-    height = (maxy - miny) / n_rows
-    
-    for i in range(n_rows):
-        for j in range(n_cols):
-            if len(sub_poligonos) >= n_zonas:
-                break
-                
-            cell_minx = minx + (j * width)
-            cell_maxx = minx + ((j + 1) * width)
-            cell_miny = miny + (i * height)
-            cell_maxy = miny + ((i + 1) * height)
+            if nutriente == "NITRÓGENO":
+                cmap = LinearSegmentedColormap.from_list('nitrogeno_gee', PALETAS_GEE['NITROGENO'])
+                vmin, vmax = (PARAMETROS_CULTIVOS[cultivo]['NITROGENO']['min'] * 0.8, 
+                            PARAMETROS_CULTIVOS[cultivo]['NITROGENO']['max'] * 1.2)
+            elif nutriente == "FÓSFORO":
+                cmap = LinearSegmentedColormap.from_list('fosforo_gee', PALETAS_GEE['FOSFORO'])
+                vmin, vmax = (PARAMETROS_CULTIVOS[cultivo]['FOSFORO']['min'] * 0.8, 
+                            PARAMETROS_CULTIVOS[cultivo]['FOSFORO']['max'] * 1.2)
+            else:
+                cmap = LinearSegmentedColormap.from_list('potasio_gee', PALETAS_GEE['POTASIO'])
+                vmin, vmax = (PARAMETROS_CULTIVOS[cultivo]['POTASIO']['min'] * 0.8, 
+                            PARAMETROS_CULTIVOS[cultivo]['POTASIO']['max'] * 1.2)
             
-            cell_poly = Polygon([
-                (cell_minx, cell_miny),
-                (cell_maxx, cell_miny),
-                (cell_maxx, cell_maxy),
-                (cell_minx, cell_maxy)
-            ])
+            columna = 'valor_recomendado'
+            titulo_sufijo = f'Recomendación {nutriente} (kg/ha)'
+        
+        # Plotear cada polígono
+        for idx, row in gdf.iterrows():
+            valor = row[columna]
+            valor_norm = (valor - vmin) / (vmax - vmin)
+            valor_norm = max(0, min(1, valor_norm))
+            color = cmap(valor_norm)
             
-            intersection = parcela_principal.intersection(cell_poly)
-            if not intersection.is_empty and intersection.area > 0:
-                sub_poligonos.append(intersection)
-    
-    if sub_poligonos:
-        nuevo_gdf = gpd.GeoDataFrame({
-            'id_zona': range(1, len(sub_poligonos) + 1),
-            'geometry': sub_poligonos
-        }, crs=gdf.crs)
-        return nuevo_gdf
-    else:
-        return gdf
+            gdf.iloc[[idx]].plot(ax=ax, color=color, edgecolor='black', linewidth=1.5)
+            
+            # Etiqueta con valor
+            centroid = row.geometry.centroid
+            ax.annotate(f"Z{row['id_zona']}\n{valor:.1f}", (centroid.x, centroid.y), 
+                       xytext=(5, 5), textcoords="offset points", 
+                       fontsize=8, color='black', weight='bold',
+                       bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.9))
+        
+        # Configuración del mapa
+        ax.set_title(f'{ICONOS_CULTIVOS[cultivo]} ANÁLISIS GEE - {cultivo}\n'
+                    f'{analisis_tipo} - {titulo_sufijo}\n'
+                    f'Metodología Google Earth Engine', 
+                    fontsize=16, fontweight='bold', pad=20)
+        
+        ax.set_xlabel('Longitud')
+        ax.set_ylabel('Latitud')
+        ax.grid(True, alpha=0.3)
+        
+        # Barra de colores
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, shrink=0.8)
+        cbar.set_label(titulo_sufijo, fontsize=12, fontweight='bold')
+        
+        plt.tight_layout()
+        
+        # Convertir a imagen
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+        
+    except Exception as e:
+        st.error(f"❌ Error creando mapa GEE: {str(e)}")
+        return None
 
-# Mantener las funciones originales de recomendaciones NPK y categorización...
-# [Aquí irían las funciones calcular_recomendaciones_npk_gee, crear_mapa_gee, etc.]
-# ... (manteniendo la misma lógica del primer código pero integrando las mejoras)
-
-# =============================================================================
-# FUNCIÓN PRINCIPAL MEJORADA
-# =============================================================================
-
+# FUNCIÓN PRINCIPAL DE ANÁLISIS GEE MEJORADA
 def analisis_gee_completo_mejorado(gdf, nutriente, analisis_tipo, n_divisiones, cultivo, usar_sentinel, fecha_imagen, mapa_base):
     try:
         st.header(f"{ICONOS_CULTIVOS[cultivo]} ANÁLISIS {cultivo} - METODOLOGÍA GEE + SENTINEL-2")
@@ -584,20 +189,76 @@ def analisis_gee_completo_mejorado(gdf, nutriente, analisis_tipo, n_divisiones, 
         else:
             columna_valor = 'npk_actual'
         
-        # [Mantener el resto de la lógica de categorización y resultados...]
+        # PASO 4: CATEGORIZAR PARA RECOMENDACIONES ESPECÍFICAS POR CULTIVO
+        def categorizar_gee(valor, nutriente, analisis_tipo, cultivo):
+            params = PARAMETROS_CULTIVOS[cultivo]
+            
+            if analisis_tipo == "FERTILIDAD ACTUAL":
+                if valor < 0.3: return "MUY BAJA"
+                elif valor < 0.5: return "BAJA"
+                elif valor < 0.6: return "MEDIA"
+                elif valor < 0.7: return "BUENA"
+                else: return "ÓPTIMA"
+            else:
+                if nutriente == "NITRÓGENO":
+                    rango = params['NITROGENO']['max'] - params['NITROGENO']['min']
+                    if valor < params['NITROGENO']['min'] + 0.2 * rango: return "MUY BAJO"
+                    elif valor < params['NITROGENO']['min'] + 0.4 * rango: return "BAJO"
+                    elif valor < params['NITROGENO']['min'] + 0.6 * rango: return "MEDIO"
+                    elif valor < params['NITROGENO']['min'] + 0.8 * rango: return "ALTO"
+                    else: return "MUY ALTO"
+                elif nutriente == "FÓSFORO":
+                    rango = params['FOSFORO']['max'] - params['FOSFORO']['min']
+                    if valor < params['FOSFORO']['min'] + 0.2 * rango: return "MUY BAJO"
+                    elif valor < params['FOSFORO']['min'] + 0.4 * rango: return "BAJO"
+                    elif valor < params['FOSFORO']['min'] + 0.6 * rango: return "MEDIO"
+                    elif valor < params['FOSFORO']['min'] + 0.8 * rango: return "ALTO"
+                    else: return "MUY ALTO"
+                else:
+                    rango = params['POTASIO']['max'] - params['POTASIO']['min']
+                    if valor < params['POTASIO']['min'] + 0.2 * rango: return "MUY BAJO"
+                    elif valor < params['POTASIO']['min'] + 0.4 * rango: return "BAJO"
+                    elif valor < params['POTASIO']['min'] + 0.6 * rango: return "MEDIO"
+                    elif valor < params['POTASIO']['min'] + 0.8 * rango: return "ALTO"
+                    else: return "MUY ALTO"
         
-        # MOSTRAR RESULTADOS CON MAPAS INTERACTIVOS
-        st.subheader("🗺️ MAPA INTERACTIVO - RESULTADOS GEE")
+        gdf_analizado['categoria'] = [
+            categorizar_gee(row[columna_valor], nutriente, analisis_tipo, cultivo) 
+            for idx, row in gdf_analizado.iterrows()
+        ]
+        
+        # PASO 5: MOSTRAR RESULTADOS
+        st.subheader("📊 RESULTADOS DEL ANÁLISIS GEE")
+        
+        # Estadísticas principales
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Zonas Analizadas", len(gdf_analizado))
+        with col2:
+            st.metric("Área Total", f"{area_total:.1f} ha")
+        with col3:
+            if analisis_tipo == "FERTILIDAD ACTUAL":
+                valor_prom = gdf_analizado['npk_actual'].mean()
+                st.metric("Índice NPK Promedio", f"{valor_prom:.3f}")
+            else:
+                valor_prom = gdf_analizado['valor_recomendado'].mean()
+                st.metric(f"{nutriente} Promedio", f"{valor_prom:.1f} kg/ha")
+        with col4:
+            coef_var = (gdf_analizado[columna_valor].std() / gdf_analizado[columna_valor].mean() * 100)
+            st.metric("Coef. Variación", f"{coef_var:.1f}%")
+        
+        # VISUALIZACIÓN CON PESTAÑAS
+        st.subheader("🗺️ VISUALIZACIÓN DE RESULTADOS")
         
         # Crear pestañas para diferentes visualizaciones
         tab1, tab2, tab3 = st.tabs([
-            "🎯 Mapa Interactivo", 
-            "📊 Gráfico Tradicional", 
+            "🗺️ Mapa Interactivo ESRI", 
+            "📊 Mapa Tradicional", 
             "📋 Tabla de Resultados"
         ])
         
         with tab1:
-            st.subheader("🗺️ VISUALIZACIÓN INTERACTIVA CON ESRI")
+            st.subheader("🗺️ MAPA INTERACTIVO CON ESRI")
             with st.spinner("Generando mapa interactivo..."):
                 mapa_interactivo = crear_mapa_interactivo_gee(
                     gdf_analizado, nutriente, analisis_tipo, cultivo, mapa_base
@@ -609,40 +270,136 @@ def analisis_gee_completo_mejorado(gdf, nutriente, analisis_tipo, n_divisiones, 
                    f"**Procesamiento:** {indices_gee[0]['procesamiento']}")
         
         with tab2:
-            st.subheader("📊 VISUALIZACIÓN TRADICIONAL")
-            # Mantener la función original de matplotlib
+            st.subheader("📊 MAPA TRADICIONAL GEE")
             mapa_buffer = crear_mapa_gee(gdf_analizado, nutriente, analisis_tipo, cultivo)
             if mapa_buffer:
                 st.image(mapa_buffer, use_container_width=True)
+                
+                st.download_button(
+                    "📥 Descargar Mapa GEE",
+                    mapa_buffer,
+                    f"mapa_gee_{cultivo}_{analisis_tipo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.png",
+                    "image/png"
+                )
         
         with tab3:
-            st.subheader("📋 TABLA DETALLADA DE RESULTADOS")
-            columnas_indices = ['id_zona', 'npk_actual', 'materia_organica', 'ndvi', 'ndre', 
-                              'humedad_suelo', 'fuente_datos', 'categoria']
+            st.subheader("📋 TABLA DE ÍNDICES GEE POR ZONA")
+            
+            columnas_indices = ['id_zona', 'npk_actual', 'materia_organica', 'ndvi', 'ndre', 'humedad_suelo', 'categoria']
             if analisis_tipo == "RECOMENDACIONES NPK":
                 columnas_indices.insert(2, 'valor_recomendado')
             
             tabla_indices = gdf_analizado[columnas_indices].copy()
             tabla_indices.columns = ['Zona', 'NPK Actual'] + (['Recomendación'] if analisis_tipo == "RECOMENDACIONES NPK" else []) + [
-                'Materia Org (%)', 'NDVI', 'NDRE', 'Humedad', 'Fuente', 'Categoría'
+                'Materia Org (%)', 'NDVI', 'NDRE', 'Humedad', 'Categoría'
             ]
             
             st.dataframe(tabla_indices, use_container_width=True)
         
-        # [Mantener el resto de la lógica de recomendaciones y descargas...]
+        # RECOMENDACIONES ESPECÍFICAS POR CULTIVO
+        st.subheader("💡 RECOMENDACIONES ESPECÍFICAS GEE")
+        
+        categorias = gdf_analizado['categoria'].unique()
+        for cat in sorted(categorias):
+            subset = gdf_analizado[gdf_analizado['categoria'] == cat]
+            area_cat = subset['area_ha'].sum()
+            
+            with st.expander(f"🎯 **{cat}** - {area_cat:.1f} ha ({(area_cat/area_total*100):.1f}% del área)"):
+                
+                if analisis_tipo == "FERTILIDAD ACTUAL":
+                    if cat in ["MUY BAJA", "BAJA"]:
+                        st.markdown("**🚨 ESTRATEGIA: FERTILIZACIÓN CORRECTIVA**")
+                        st.markdown("- Aplicar dosis completas de NPK")
+                        st.markdown("- Incorporar materia orgánica")
+                        st.markdown("- Monitorear cada 3 meses")
+                    elif cat == "MEDIA":
+                        st.markdown("**✅ ESTRATEGIA: MANTENIMIENTO BALANCEADO**")
+                        st.markdown("- Seguir programa estándar de fertilización")
+                        st.markdown("- Monitorear cada 6 meses")
+                    else:
+                        st.markdown("**🌟 ESTRATEGIA: MANTENIMIENTO CONSERVADOR**")
+                        st.markdown("- Reducir dosis de fertilizantes")
+                        st.markdown("- Enfoque en sostenibilidad")
+                
+                else:
+                    # Recomendaciones NPK específicas por cultivo
+                    if cat in ["MUY BAJO", "BAJO"]:
+                        st.markdown("**🚨 APLICACIÓN ALTA** - Dosis correctiva urgente")
+                        if nutriente == "NITRÓGENO":
+                            st.markdown(f"- **Fuentes:** Urea (46% N) o {get_fuente_nitrogeno(cultivo)}")
+                            st.markdown("- **Aplicación:** 2-3 dosis fraccionadas")
+                        elif nutriente == "FÓSFORO":
+                            st.markdown("- **Fuentes:** Superfosfato triple (46% P₂O₅) o Fosfato diamónico")
+                            st.markdown("- **Aplicación:** Incorporar al suelo")
+                        else:
+                            st.markdown("- **Fuentes:** Cloruro de potasio (60% K₂O) o Sulfato de potasio")
+                            st.markdown("- **Aplicación:** 2-3 aplicaciones")
+                    
+                    elif cat == "MEDIO":
+                        st.markdown("**✅ APLICACIÓN MEDIA** - Mantenimiento balanceado")
+                        st.markdown(f"- **Fuentes:** {get_fertilizante_balanceado(cultivo)}")
+                        st.markdown("- **Aplicación:** Programa estándar")
+                    
+                    else:
+                        st.markdown("**🌟 APLICACIÓN BAJA** - Reducción de dosis")
+                        st.markdown("- **Fuentes:** Fertilizantes bajos en el nutriente")
+                        st.markdown("- **Aplicación:** Solo mantenimiento")
+                
+                # Mostrar estadísticas de la categoría
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Zonas", len(subset))
+                with col2:
+                    if analisis_tipo == "FERTILIDAD ACTUAL":
+                        st.metric("NPK Prom", f"{subset['npk_actual'].mean():.3f}")
+                    else:
+                        st.metric("Valor Prom", f"{subset['valor_recomendado'].mean():.1f}")
+                with col3:
+                    st.metric("Área", f"{area_cat:.1f} ha")
+        
+        # DESCARGA DE RESULTADOS
+        st.subheader("📥 DESCARGAR RESULTADOS COMPLETOS")
+        
+        csv = gdf_analizado.to_csv(index=False)
+        st.download_button(
+            "📋 Descargar CSV con Análisis GEE",
+            csv,
+            f"analisis_gee_{cultivo}_{analisis_tipo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            "text/csv"
+        )
+        
+        # INFORMACIÓN TÉCNICA GEE
+        with st.expander("🔍 VER METODOLOGÍA GEE DETALLADA"):
+            st.markdown(f"""
+            **🌐 METODOLOGÍA GOOGLE EARTH ENGINE + SENTINEL-2 - {cultivo}**
+            
+            **🎯 PARÁMETROS ÓPTIMOS {cultivo}:**
+            - **Materia Orgánica:** {PARAMETROS_CULTIVOS[cultivo]['MATERIA_ORGANICA_OPTIMA']}%
+            - **Humedad Suelo:** {PARAMETROS_CULTIVOS[cultivo]['HUMEDAD_OPTIMA']}
+            - **NDVI Óptimo:** {PARAMETROS_CULTIVOS[cultivo]['NDVI_OPTIMO']}
+            - **NDRE Óptimo:** {PARAMETROS_CULTIVOS[cultivo]['NDRE_OPTIMO']}
+            
+            **🎯 RANGOS NPK RECOMENDADOS:**
+            - **Nitrógeno:** {PARAMETROS_CULTIVOS[cultivo]['NITROGENO']['min']}-{PARAMETROS_CULTIVOS[cultivo]['NITROGENO']['max']} kg/ha
+            - **Fósforo:** {PARAMETROS_CULTIVOS[cultivo]['FOSFORO']['min']}-{PARAMETROS_CULTIVOS[cultivo]['FOSFORO']['max']} kg/ha  
+            - **Potasio:** {PARAMETROS_CULTIVOS[cultivo]['POTASIO']['min']}-{PARAMETROS_CULTIVOS[cultivo]['POTASIO']['max']} kg/ha
+            
+            **🛰️ DATOS SENTINEL-2 HARMONIZADOS UTILIZADOS:**
+            - **Resolución:** 10m
+            - **Procesamiento:** L2A (Corrección Atmosférica)
+            - **Bandas Utilizadas:** B2, B4, B5, B8, B11
+            - **Índices Calculados:** NDVI, NDRE, Materia Orgánica, Humedad
+            """)
         
         return True
         
     except Exception as e:
-        st.error(f"❌ Error en análisis GEE mejorado: {str(e)}")
+        st.error(f"❌ Error en análisis GEE: {str(e)}")
         import traceback
         st.error(f"Detalle: {traceback.format_exc()}")
         return False
 
-# =============================================================================
-# INTERFAZ PRINCIPAL MEJORADA
-# =============================================================================
-
+# INTERFAZ PRINCIPAL
 if uploaded_zip:
     with st.spinner("Cargando parcela..."):
         try:
@@ -681,29 +438,6 @@ if uploaded_zip:
                         if usar_sentinel:
                             st.write(f"- Fecha: {fecha_imagen}")
                             st.write(f"- Resolución: 10m")
-                    
-                    # Vista previa del mapa base
-                    st.subheader("🗺️ VISTA PREVIA DE LA PARCELA")
-                    with st.spinner("Cargando vista previa..."):
-                        mapa_preview = crear_mapa_base(gdf, mapa_base, zoom_start=13)
-                        
-                        # Agregar capa de parcela
-                        def estilo_preview(feature):
-                            return {
-                                'fillColor': 'blue',
-                                'color': 'black',
-                                'weight': 2,
-                                'fillOpacity': 0.3,
-                                'opacity': 0.8
-                            }
-                        
-                        folium.GeoJson(
-                            gdf.__geo_interface__,
-                            name='Parcela Cargada',
-                            style_function=estilo_preview
-                        ).add_to(mapa_preview)
-                        
-                        folium_static(mapa_preview, width=900, height=400)
                     
                     # EJECUTAR ANÁLISIS GEE MEJORADO
                     if st.button("🚀 EJECUTAR ANÁLISIS GEE + SENTINEL-2", type="primary"):
