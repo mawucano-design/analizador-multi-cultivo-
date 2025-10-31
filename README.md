@@ -1,14 +1,19 @@
-# 🌱 Analizador Multi-Cultivo - Sentinel 2 + ESRI
+# 🌱 Analizador Multi-Cultivo - GEE + Sentinel-2
 
-Aplicación web robusta para análisis de fertilidad y recomendaciones NPK en múltiples cultivos usando metodología Google Earth Engine con datos Sentinel 2 y mapas ESRI.
+Sistema de análisis agrícola que combina la metodología Google Earth Engine con datos Sentinel-2 Harmonizados para recomendaciones de fertilización específicas por cultivo.
 
-## 🚀 Características Principales
+## 🚀 Características
 
-- **🛰️ Sentinel 2 Harmonized**: Simulación realista de datos satelitales
-- **🗺️ Mapas ESRI**: Visualización profesional con imágenes actualizadas
-- **🌱 Multi-Cultivo**: Soporte completo para Trigo, Maíz, Soja, Sorgo, Girasol
-- **💊 Recomendaciones NPK**: Dosis específicas por cultivo y zona
-- **📊 Análisis por Zonas**: División inteligente de parcelas
-- **🎯 Robustez**: Manejo avanzado de errores y fallbacks
+- **🛰️ Datos Sentinel-2 Harmonizados**: Resolución 10m con corrección atmosférica L2A
+- **🌱 Multi-Cultivo**: Soporte para trigo, maíz, soja, sorgo y girasol
+- **🎯 Recomendaciones NPK**: Dosis específicas por cultivo y zona
+- **🗺️ Mapas Interactivos**: Visualización con mapas base ESRI
+- **📊 Análisis de Precisión**: División en zonas de manejo
 
-## 🏗️ Estructura del Proyecto
+## 🛠️ Instalación
+
+```bash
+git clone https://github.com/tu-usuario/analizador-multi-cultivo.git
+cd analizador-multi-cultivo
+pip install -r requirements.txt
+streamlit run app.py
