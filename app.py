@@ -12,19 +12,20 @@ from shapely.geometry import Polygon
 import math
 import warnings
 import matplotlib.pyplot as plt
-import io
+from io import BytesIO
 
 # --- FALLBACKS ---
 try:
     from sentinelhub import SHConfig, SentinelHubRequest, MimeType, CRS, BBox, DataCollection
     SH_AVAILABLE = True
-except ImportError:
+except:
     SH_AVAILABLE = False
+    st.warning("Sentinel Hub no disponible. Usando simulación realista.")
 
 try:
     from fpdf import FPDF
     PDF_AVAILABLE = True
-except ImportError:
+except:
     PDF_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
@@ -34,7 +35,7 @@ st.title("ANALIZADOR MULTI-CULTIVO")
 st.markdown("**Análisis NPK por zonas con Sentinel-2 L2A (10m)**")
 st.markdown("---")
 
-# --- CULTIVOS ---
+# --- CULTIVOS CON RECOMENDACIONES ---
 CULTIVOS = {
     'TRIGO': {'N': (120, 180), 'P': (40, 60), 'K': (80, 120), 'NDVI': 0.7},
     'MAÍZ': {'N': (150, 220), 'P': (50, 70), 'K': (100, 140), 'NDVI': 0.75},
@@ -46,8 +47,7 @@ CULTIVOS = {
 # --- CONFIG SH ---
 @st.cache_resource
 def get_sh_config():
-    if not SH_AVAILABLE:
-        return None
+    if not SH_AVAILABLE: return None
     config = SHConfig()
     if 'SH_CLIENT_ID' in st.secrets:
         config.sh_client_id = st.secrets['SH_CLIENT_ID']
@@ -60,16 +60,17 @@ EVALSCRIPT = """
 function setup() {
   return {
     input: ["B04", "B08", "B05", "B11", "CLM"],
-    output: { bands: 4 }
+    output: { bands: 4, sampleType: "FLOAT32" }
   };
 }
 function evaluatePixel(s) {
-  let ndvi = (s.B08 - s.B04) / (s.B08 + s.B04);
-  let ndre = (s.B08 - s.B05) / (s.B08 + s.B05);
-  let lai = ndvi > 0.1 ? ndvi * 5.5 : 0.1;
+  let ndvi = index(s.B08, s.B04);
+  let ndre = index(s.B08, s.B05);
+  let lai = ndvi > 0.1 ? Math.pow(ndvi, 2) * 5.5 : 0.1;
   let humedad = 1 - (s.B11 / 10000);
   return [ndvi, ndre, lai, humedad];
 }
+function index(a, b) { return a && b ? (a - b) / (a + b + 0.0001) : 0; }
 """
 
 # --- PROCESADOR ---
@@ -86,11 +87,11 @@ class Processor:
                     input_data=[SentinelHubRequest.input_data(
                         data_collection=DataCollection.SENTINEL2_L2A,
                         time_interval=(str(fecha), str(fecha + timedelta(days=1))),
-                        other_args={"processing": {"cloudCoverage": 20}}
+                        other_args={"maxCloudCoverage": 20}
                     )],
                     responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
                     bbox=bbox_sh,
-                    size=(256, 256),
+                    size=(128, 128),
                     config=self.config
                 )
                 data = request.get_data()[0]
@@ -101,13 +102,13 @@ class Processor:
                     'humedad': float(np.mean(data[:, :, 3])),
                     'fuente': 'Sentinel-2 L2A'
                 }
-            except:
-                pass
+            except Exception as e:
+                st.warning(f"API error: {e}. Usando simulación.")
         # Simulación realista
-        ndvi = np.clip(0.5 + np.random.normal(0, 0.12), 0.1, 0.9)
+        ndvi = np.clip(0.45 + np.random.normal(0, 0.12), 0.1, 0.9)
         return {
             'ndvi': ndvi,
-            'ndre': ndvi - 0.15,
+            'ndre': max(0, ndvi - 0.15),
             'lai': ndvi * 5.5,
             'humedad': np.clip(0.3 + np.random.normal(0, 0.08), 0.1, 0.7),
             'fuente': 'Simulado'
@@ -130,6 +131,10 @@ def dividir_zonas(gdf, n):
                 zonas.append(inter)
     return gpd.GeoDataFrame({'zona': range(1, len(zonas)+1), 'geometry': zonas}, crs=gdf.crs)
 
+# --- ÁREA ---
+def area_ha(gdf):
+    return gdf.to_crs('EPSG:3857').area / 10000
+
 # --- MAPA ---
 def crear_mapa(gdf):
     center = [gdf.centroid.y.mean(), gdf.centroid.x.mean()]
@@ -140,16 +145,35 @@ def crear_mapa(gdf):
     ).add_to(m)
     folium.GeoJson(gdf, style_function=lambda f: {
         'fillColor': 'green' if f['properties']['npk'] > 0.7 else 'yellow' if f['properties']['npk'] > 0.4 else 'red',
-        'color': 'black'
-    }).add_to(m)
+        'color': 'black', 'weight': 1, 'fillOpacity': 0.7
+    }, tooltip=folium.GeoJsonTooltip(['zona', 'ndvi', 'npk', 'area_ha'])).add_to(m)
     return m
+
+# --- PDF ---
+def generar_pdf(gdf, cultivo):
+    if not PDF_AVAILABLE: return None
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt=f"Reporte {cultivo} - {datetime.now().strftime('%Y-%m-%d')}", ln=1, align='C')
+    pdf.cell(200, 10, txt=f"NDVI Promedio: {gdf['ndvi'].mean():.3f}", ln=1)
+    pdf.cell(200, 10, txt=f"NPK Promedio: {gdf['npk'].mean():.3f}", ln=1)
+    img = BytesIO()
+    plt.figure(figsize=(6,4))
+    plt.bar(gdf['zona'], gdf['npk'])
+    plt.title("NPK por Zona")
+    plt.savefig(img, format='png')
+    plt.close()
+    img.seek(0)
+    pdf.image(img, w=180)
+    return BytesIO(pdf.output(dest='S').encode('latin1'))
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("Config")
+    st.header("Configuración")
     cultivo = st.selectbox("Cultivo", list(CULTIVOS.keys()))
     fecha = st.date_input("Fecha", value=datetime.now() - timedelta(days=15))
-    zonas = st.slider("Zonas", 16, 48, 32)
+    zonas = st.slider("Zonas", 16, 48, 32, 4)
     zip_file = st.file_uploader("ZIP Shapefile", type=['zip'])
 
 # --- MAIN ---
@@ -158,27 +182,55 @@ if zip_file:
         with zipfile.ZipFile(zip_file) as z:
             z.extractall(tmp)
         shp = next((f for f in os.listdir(tmp) if f.endswith('.shp')), None)
-        if shp:
+        if not shp:
+            st.error("No se encontró .shp en el ZIP")
+        else:
             gdf = gpd.read_file(os.path.join(tmp, shp))
-            area = gdf.to_crs('EPSG:3857').area.sum() / 10000
-            st.success(f"Parcela: {area:.1f} ha")
+            area_total = area_ha(gdf).sum()
+            st.success(f"Parcela cargada: {area_total:.1f} ha")
 
-            if st.button("ANALIZAR"):
+            if st.button("EJECUTAR ANÁLISIS", type="primary"):
                 gdf_z = dividir_zonas(gdf, zonas)
                 proc = Processor(get_sh_config())
                 bounds = gdf_z.total_bounds
-                resultados = [proc.get_indices(bounds, fecha) for _ in gdf_z.iterrows()]
+                resultados = []
+                for _ in gdf_z.iterrows():
+                    idx = proc.get_indices(bounds, fecha)
+                    resultados.append(idx)
                 
-                for k in ['ndvi', 'ndre', 'lai', 'humedad']:
-                    gdf_z[k] = [r[k] for r in resultados]
+                gdf_z['ndvi'] = [r['ndvi'] for r in resultados]
+                gdf_z['ndre'] = [r['ndre'] for r in resultados]
+                gdf_z['lai'] = [r['lai'] for r in resultados]
+                gdf_z['humedad'] = [r['humedad'] for r in resultados]
+                gdf_z['fuente'] = [r['fuente'] for r in resultados]
                 gdf_z['npk'] = (gdf_z['ndvi']*0.5 + gdf_z['ndre']*0.3 + gdf_z['lai']/6*0.1 + gdf_z['humedad']*0.1).clip(0,1)
-                gdf_z['area_ha'] = gdf_z.to_crs('EPSG:3857').area / 10000
+                gdf_z['area_ha'] = area_ha(gdf_z)
 
-                st.metric("NDVI Promedio", f"{gdf_z['ndvi'].mean():.3f}")
-                st.subheader("Mapa")
-                folium_static(crear_mapa(gdf_z))
-                st.subheader("Resultados")
-                st.dataframe(gdf_z[['zona', 'area_ha', 'ndvi', 'npk']].round(3))
-                st.download_button("CSV", gdf_z.to_csv(index=False), "resultados.csv")
+                # Métricas
+                col1, col2, col3 = st.columns(3)
+                with col1: st.metric("NDVI", f"{gdf_z['ndvi'].mean():.3f}")
+                with col2: st.metric("NPK", f"{gdf_z['npk'].mean():.3f}")
+                with col3: st.metric("Zonas", len(gdf_z))
+
+                # Mapa
+                st.subheader("Mapa Interactivo")
+                folium_static(crear_mapa(gdf_z), width=700, height=500)
+
+                # Tabla
+                st.subheader("Resultados por Zona")
+                tabla = gdf_z[['zona', 'area_ha', 'ndvi', 'npk']].round(3)
+                st.dataframe(tabla)
+
+                # Descargas
+                st.subheader("Descargar")
+                st.download_button("CSV", gdf_z.to_csv(index=False), "resultados.csv", "text/csv")
+                st.download_button("GeoJSON", gdf_z.to_json(), "zonas.geojson", "application/json")
+                if PDF_AVAILABLE:
+                    pdf = generar_pdf(gdf_z, cultivo)
+                    if pdf:
+                        st.download_button("PDF Reporte", pdf, "reporte.pdf", "application/pdf")
 else:
-    st.info("Sube ZIP con shapefile")
+    st.info("Sube un ZIP con shapefile (.shp + .shx + .dbf)")
+
+st.markdown("---")
+st.markdown("**Funciona con o sin API**")
