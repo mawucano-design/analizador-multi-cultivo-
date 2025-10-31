@@ -7,3 +7,4 @@ folium==0.14.0
 streamlit-folium==0.15.1
 requests==2.31.0
 pillow==10.0.1
+shapely==2.0.1
