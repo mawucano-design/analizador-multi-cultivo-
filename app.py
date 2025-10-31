@@ -34,21 +34,6 @@ st.markdown("---")
 os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 
 # =============================================================================
-# CONFIGURACIÓN SENTINEL HUB
-# =============================================================================
-
-try:
-    SENTINEL_HUB_CREDENTIALS = {
-        "client_id": st.secrets["SENTINEL_HUB_CLIENT_ID"],
-        "client_secret": st.secrets["SENTINEL_HUB_CLIENT_SECRET"]
-    }
-except:
-    SENTINEL_HUB_CREDENTIALS = {
-        "client_id": "b296cf70-c9d2-4e69-91f4-f7be80b99ed1",
-        "client_secret": "358474d6-2326-4637-bf8e-30a709b2d6a6"
-    }
-
-# =============================================================================
 # MAPAS BASE ESRI
 # =============================================================================
 
@@ -218,7 +203,7 @@ if uploaded_zip:
                         gdf_dividido['area_ha'] = areas_ha
                         
                         # Simular datos Sentinel 2
-                        st.info("🛰️ Obteniendo datos Sentinel 2...")
+                        st.info("🛰️ Simulando datos Sentinel 2...")
                         
                         # Simulación de índices satelitales
                         np.random.seed(42)  # Para resultados consistentes
@@ -239,7 +224,7 @@ if uploaded_zip:
                             ndvi_prom = gdf_dividido['ndvi'].mean()
                             st.metric("NDVI Promedio", f"{ndvi_prom:.3f}")
                         with col4:
-                            st.metric("Fuente Datos", "SENTINEL-2")
+                            st.metric("Cultivo", cultivo)
                         
                         # MAPA INTERACTIVO CON ESRI
                         st.header("🗺️ Mapa de Resultados - ESRI")
@@ -258,7 +243,7 @@ if uploaded_zip:
                             else:
                                 color = '#66BB6A'  # Verde - alto
                             
-                            tooltip = f"Zona {row['id_zona']}<br>NDVI: {ndvi:.3f}<br>Área: {row['area_ha']:.1f} ha"
+                            tooltip = f"Zona {row['id_zona']}<br>NDVI: {ndvi:.3f}<br>Área: {row['area_ha']:.1f} ha<br>Biomasa: {row['biomasa_kg_ha']} kg/ha"
                             
                             folium.GeoJson(
                                 row['geometry'],
@@ -327,18 +312,17 @@ else:
     
     with col2:
         st.subheader("🛰️ Datos Satelitales")
-        st.write("✅ **Sentinel 2 Harmonized**")
-        st.write("✅ **Resolución: 10m**")
-        st.write("✅ **Actualización: 5 días**")
-        st.write("✅ **Corrección atmosférica: L2A**")
+        st.write("✅ **Simulación Sentinel 2**")
+        st.write("✅ **Metodología GEE**")
+        st.write("✅ **Mapas ESRI en tiempo real**")
+        st.write("✅ **Análisis por zonas**")
     
     st.markdown("---")
     st.subheader("🚀 Cómo usar la aplicación:")
     st.write("1. **Sube** un ZIP con shapefile de tu parcela")
     st.write("2. **Configura** cultivo y parámetros en el sidebar")
-    st.write("3. **Selecciona** fecha de imagen satelital")
-    st.write("4. **Ejecuta** el análisis con datos reales de Sentinel 2")
-    st.write("5. **Visualiza** resultados en mapas ESRI interactivos")
+    st.write("3. **Visualiza** resultados en mapas ESRI interactivos")
+    st.write("4. **Descarga** los resultados en CSV")
 
 st.markdown("---")
-st.caption("🌱 Analizador Multi-Cultivo - Sentinel 2 + ESRI")
+st.caption("🌱 Analizador Multi-Cultivo - Metodología GEE + ESRI")
