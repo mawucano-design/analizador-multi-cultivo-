@@ -1,0 +1,22 @@
+# Streamlit
+.streamlit/
+cache/
+
+# Python
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# Datos
+*.zip
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+
+# IDE
+.vscode/
+.idea/
