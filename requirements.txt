@@ -5,3 +5,7 @@ numpy==1.26.4
 folium==0.17.0
 streamlit-folium==0.17.0
 shapely==2.0.3
+sentinelhub==3.9.1  # ← NUEVO: Para API real
+fpdf2==2.8.1        # ← NUEVO: Para PDF
+branca==0.7.0       # ← NUEVO: Para colormaps avanzados en Folium
+matplotlib==3.8.2   # ← Actualizado para mejores gráficos en PDF
