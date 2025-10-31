@@ -9,7 +9,7 @@ font = "sans serif"
 port = 8501
 address = "0.0.0.0"
 enableCORS = false
-enableXsrfProtection = false
+enableXsrfProtection = true
 
 [browser]
 gatherUsageStats = false
