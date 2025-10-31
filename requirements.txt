@@ -1,7 +1,10 @@
-streamlit==1.38.0
-geopandas==0.14.1
-pandas==2.2.2
+streamlit==1.28.1
+geopandas==0.14.0
+pandas==2.1.4
 numpy==1.26.4
-folium==0.17.0
-streamlit-folium==0.17.0
-shapely==2.0.3
+folium==0.15.1
+streamlit-folium==0.14.0
+shapely==2.0.6
+sentinelhub==3.8.0
+fpdf2==2.7.5
+matplotlib==3.7.2
