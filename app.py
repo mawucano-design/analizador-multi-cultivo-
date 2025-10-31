@@ -30,8 +30,8 @@ os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 # =============================================================================
 
 SENTINEL_HUB_CREDENTIALS = {
-    "client_id": "tu_client_id_aqui",
-    "client_secret": "tu_client_secret_aqui"
+    "client_id": "b296cf70-c9d2-4e69-91f4-f7be80b99ed1",
+    "client_secret": "358474d6-2326-4637-bf8e-30a709b2d6a6"
 }
 
 class SentinelHubConfig:
