@@ -13,6 +13,12 @@ import math
 import warnings
 
 # IMPORTS CONDICIONALES PARA SENTINEL HUB (ANTI-ERROR)
+SENTINEL_HUB_CREDENTIALS = {
+    "client_id": "b296cf70-c9d2-4e69-91f4-f7be80b99ed1",  # 🔒 CAMBIA ESTO
+    "client_secret": "358474d6-2326-4637-bf8e-30a709b2d6a6"  # 🔒 CAMBIA ESTO
+}
+
+
 try:
     from sentinelhub import SHConfig, SentinelHubRequest, MimeType, CRS, BBox, DataCollection, Geometry
     SENTINELHUB_AVAILABLE = True
