@@ -1,22 +1,44 @@
-# Streamlit
-.streamlit/
-cache/
-
 # Python
 __pycache__/
-*.pyc
-.env
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
 venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Datos
+# Streamlit
+.streamlit/
+.streamlit/secrets.toml
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Datos locales
 *.zip
 *.shp
 *.shx
 *.dbf
 *.prj
 *.cpg
-
-# IDE
-.vscode/
-.idea/
