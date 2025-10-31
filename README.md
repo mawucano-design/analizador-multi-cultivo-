@@ -1,15 +1,21 @@
-# 🌱 Analizador Multi-Cultivo
+# Analizador Multi-Cultivo - Sentinel-2 + ESRI
 
-Sistema de análisis agrícola para recomendaciones de fertilización específicas por cultivo.
+**Análisis de fertilidad NPK por zonas usando imágenes reales Sentinel-2 (10m) y mapas base ESRI.**
 
-## 🚀 Características
+---
 
-- **🌱 Multi-Cultivo**: Trigo, maíz, soja, sorgo, girasol
-- **🛰️ Datos Satelitales**: Simulación Sentinel-2 Harmonizados
-- **🎯 Recomendaciones NPK**: Dosis específicas por zona
-- **📊 Análisis de Precisión**: División en zonas de manejo
+## Características
 
-## 🛠️ Instalación
+- **Sentinel-2 L2A 10m** (NDVI, NDRE, LAI, humedad)
+- **Mapas ESRI World Imagery** (50cm/pixel)
+- **5 cultivos**: Trigo, Maíz, Soja, Sorgo, Girasol
+- **Zonas de manejo**: 16 a 48
+- **Recomendaciones NPK** por zona
+- **Descarga**: CSV + GeoJSON + Mapa
+
+---
+
+## Requisitos
 
 ```bash
-streamlit run app.py
+pip install -r requirements.txt
