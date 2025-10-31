@@ -1,21 +1,16 @@
-# Analizador Multi-Cultivo - Sentinel-2 + ESRI
+## 🚀 Deploy en Streamlit Cloud
 
-**Análisis de fertilidad NPK por zonas usando imágenes reales Sentinel-2 (10m) y mapas base ESRI.**
+1. Ve a [share.streamlit.io](https://share.streamlit.io)
+2. Conecta tu cuenta de GitHub
+3. Selecciona este repo
+4. Archivo principal: `app.py`
+5. **Deploy** → ¡Tu app en vivo!
 
----
+## 📱 Demo
+[Enlace a tu app Streamlit] (agrega cuando la deployes)
 
-## Características
+## 🤝 Contribuciones
+¡Forkea, mejora y pull request! Ideas: integración real con Sentinel Hub API, más cultivos, reportes PDF.
 
-- **Sentinel-2 L2A 10m** (NDVI, NDRE, LAI, humedad)
-- **Mapas ESRI World Imagery** (50cm/pixel)
-- **5 cultivos**: Trigo, Maíz, Soja, Sorgo, Girasol
-- **Zonas de manejo**: 16 a 48
-- **Recomendaciones NPK** por zona
-- **Descarga**: CSV + GeoJSON + Mapa
-
----
-
-## Requisitos
-
-```bash
-pip install -r requirements.txt
+## 📄 Licencia
+MIT License - Usa libremente.
