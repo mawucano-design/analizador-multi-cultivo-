@@ -11,18 +11,34 @@ from streamlit_folium import folium_static
 from shapely.geometry import Polygon
 import math
 import warnings
-from sentinelhub import SHConfig, SentinelHubRequest, MimeType, CRS, BBox, DataCollection
-from sentinelhub import Geometry
-import branca.colormap as cm  # ← NUEVO: Para leyendas numéricas
-from fpdf import FPDF  # ← NUEVO: Para PDF
-import matplotlib.pyplot as plt
-import io
+
+# IMPORTS CONDICIONALES PARA SENTINEL HUB (ANTI-ERROR)
+try:
+    from sentinelhub import SHConfig, SentinelHubRequest, MimeType, CRS, BBox, DataCollection, Geometry
+    SENTINELHUB_AVAILABLE = True
+except ImportError:
+    SENTINELHUB_AVAILABLE = False
+    st.warning("⚠️ SentinelHub no disponible. Usando simulación de datos.")
+
+try:
+    from fpdf import FPDF
+    FPDF_AVAILABLE = True
+except ImportError:
+    FPDF_AVAILABLE = False
+    st.warning("⚠️ fpdf2 no disponible. PDF deshabilitado.")
+
+try:
+    import branca.colormap as cm
+    BRANCA_AVAILABLE = True
+except ImportError:
+    BRANCA_AVAILABLE = False
+    st.warning("⚠️ branca no disponible. Leyendas simples.")
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="Analizador Multi-Cultivo + Sentinel-2 Real", layout="wide")
-st.title("🌱 ANALIZADOR MULTI-CULTIVO - SENTINEL-2 API + PDF Reports")
-st.markdown("**Agricultura de Precisión con API Real Sentinel Hub + Reportes PDF**")
+st.set_page_config(page_title="Analizador Multi-Cultivo + Sentinel-2", layout="wide")
+st.title("🌱 ANALIZADOR MULTI-CULTIVO - SENTINEL-2 + PDF + Leyendas")
+st.markdown("**Agricultura de Precisión con IA + Satélite + Reportes PDF**")
 st.markdown("---")
 
 os.environ['SHAPE_RESTORE_SHX'] = 'YES'
@@ -62,30 +78,28 @@ PARAMETROS_CULTIVOS = {
 ICONOS_CULTIVOS = {'TRIGO': '🌾', 'MAÍZ': '🌽', 'SOJA': '🫘', 'SORGO': '🌾', 'GIRASOL': '🌻'}
 
 # =============================================================================
-# CONFIGURACIÓN SENTINEL HUB API REAL
+# SENTINEL HUB CONFIG (SOLO SI DISPONIBLE)
 # =============================================================================
 @st.cache_resource
 def get_sh_config():
+    if not SENTINELHUB_AVAILABLE:
+        return None
     config = SHConfig()
-    if 'SH_CLIENT_ID' in st.secrets and 'SH_CLIENT_SECRET' in st.secrets:
+    # Usa secrets o sidebar para credenciales
+    if 'SH_CLIENT_ID' in st.secrets:
         config.sh_client_id = st.secrets['SH_CLIENT_ID']
         config.sh_client_secret = st.secrets['SH_CLIENT_SECRET']
     else:
-        # Sidebar para credenciales manuales
-        with st.sidebar.expander("🔑 Configurar Sentinel Hub API"):
-            sh_client_id = st.text_input("Client ID:", type="password")
-            sh_client_secret = st.text_input("Client Secret:", type="password")
-            if st.button("💾 Guardar Credenciales"):
-                st.secrets['SH_CLIENT_ID'] = sh_client_id
-                st.secrets['SH_CLIENT_SECRET'] = sh_client_secret
-                st.success("✅ Credenciales guardadas. Recarga la app.")
-                st.rerun()
-        if not config.sh_client_id or not config.sh_client_secret:
-            st.warning("⚠️ Configura credenciales de Sentinel Hub para datos reales.")
-            return None
-    return config
+        with st.sidebar.expander("🔑 Sentinel Hub Credenciales"):
+            config.sh_client_id = st.text_input("Client ID", type="password")
+            config.sh_client_secret = st.text_input("Client Secret", type="password")
+            if st.button("💾 Guardar"):
+                st.secrets['SH_CLIENT_ID'] = config.sh_client_id
+                st.secrets['SH_CLIENT_SECRET'] = config.sh_client_secret
+                st.success("Guardado. Recarga.")
+    return config if config.sh_client_id and config.sh_client_secret else None
 
-# Evalscript para NDVI, NDRE, Humedad (Sentinel-2 L2A)
+# Evalscript simplificado
 EVALSCRIPT = """
 //VERSION=3
 function setup() {
@@ -97,8 +111,8 @@ function setup() {
 function evaluatePixel(sample) {
   let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
   let ndre = (sample.B08 - sample.B05) / (sample.B08 + sample.B05);
-  let humidity = 1 - (sample.B11 / 10000); // Proxy humedad con SWIR
-  return [ndvi, ndre, 0, humidity]; // LAI simulado como 0 por simplicidad
+  let humidity = 1 - (sample.B11 / 10000);
+  return [ndvi, ndre, 0, humidity];
 }
 """
 
@@ -107,29 +121,23 @@ class SentinelHubProcessor:
         self.config = config
 
     def get_real_indices(self, bbox, fecha, resolution=10):
-        if not self.config:
-            return self._simulate_indices(bbox, fecha)  # Fallback
+        if not self.config or not SENTINELHUB_AVAILABLE:
+            return self._simulate_indices(bbox, fecha)
         try:
-            # BBox para request
             bbox_sh = BBox(bbox=bbox, crs=CRS.WGS84)
-            # Geometría simple para el request
-            geom = Geometry(bbox_sh, crs=CRS.WGS84)
-            # Request
             request = SentinelHubRequest(
-                data_folder=None,
                 evalscript=EVALSCRIPT,
                 input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=(fecha, fecha))],
                 responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
                 bbox=bbox_sh,
-                size=(512, 512),  # Resolución 10m adaptada
+                size=(512, 512),
                 config=self.config
             )
-            # Ejecutar (devuelve array, promediamos para zona)
             data = request.get_data()[0]
             ndvi_mean = np.mean(data[:, :, 0])
             ndre_mean = np.mean(data[:, :, 1])
             humidity_mean = np.mean(data[:, :, 3])
-            lai = ndvi_mean * 5.5  # Proxy LAI
+            lai = ndvi_mean * 5.5
             return {
                 'ndvi': round(float(ndvi_mean), 3),
                 'ndre': round(float(ndre_mean), 3),
@@ -138,11 +146,10 @@ class SentinelHubProcessor:
                 'fuente': 'Sentinel Hub API Real'
             }
         except Exception as e:
-            st.warning(f"⚠️ API Error: {e}. Usando simulación.")
+            st.warning(f"API Error: {e}. Usando simulación.")
             return self._simulate_indices(bbox, fecha)
 
     def _simulate_indices(self, bbox, fecha):
-        # Simulación como fallback (código anterior)
         x_norm = (bbox[0] * 100) % 1
         y_norm = (bbox[1] * 100) % 1
         fecha_dt = datetime.combine(fecha, datetime.min.time())
@@ -151,10 +158,10 @@ class SentinelHubProcessor:
         ndre = max(0.05, min(0.75, 0.35 + x_norm * 0.25 - y_norm * 0.15 + np.random.normal(0, 0.035)))
         lai = max(0.5, min(6.0, ndvi * 5.5 + np.random.normal(0, 0.3)))
         humedad = max(0.08, min(0.75, 0.28 - (dias / 365 * 0.1) + np.random.normal(0, 0.045)))
-        return {'ndvi': round(ndvi, 3), 'ndre': round(ndre, 3), 'lai': round(lai, 2), 'humedad_suelo': round(humedad, 3), 'fuente': 'Simulado (API Falló)'}
+        return {'ndvi': round(ndvi, 3), 'ndre': round(ndre, 3), 'lai': round(lai, 2), 'humedad_suelo': round(humedad, 3), 'fuente': 'Simulado'}
 
 # =============================================================================
-# MAPAS CON LEYENDAS NUMÉRICAS MEJORADAS
+# MAPAS CON LEYENDAS SIMPLES (FALLBACK SI NO BRANCA)
 # =============================================================================
 def crear_mapa_base_esri(gdf, mapa_seleccionado="ESRI World Imagery"):
     bounds = gdf.total_bounds
@@ -165,88 +172,104 @@ def crear_mapa_base_esri(gdf, mapa_seleccionado="ESRI World Imagery"):
         folium.TileLayer(tiles=config["url"], attr=config["attribution"], name=config["name"], control=True, show=(nombre == mapa_seleccionado)).add_to(m)
     return m
 
-def crear_leyenda_npk_interactiva():
-    # Leyenda numérica para NPK con rangos
-    colormap = cm.StepColormap(
-        colors=['#d73027', '#fdae61', '#a6d96a', '#006837'],
-        vmin=0, vmax=1,
-        index=[0.3, 0.5, 0.7, 1.0],
-        caption='Índice NPK (0-1)'
-    )
-    return colormap
+def crear_leyenda_npk_simple():
+    # Leyenda HTML simple con rangos numéricos
+    return '''
+    <div style="position: fixed; bottom: 50px; left: 50px; width: 200px; height: 180px; background-color: white; 
+                border:2px solid grey; z-index:9999; font-size:12px; padding: 10px; border-radius: 5px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.2);">
+        <div style="font-weight: bold; margin-bottom: 8px; text-align: center; font-size: 14px;">
+            📊 ÍNDICE NPK (0-1)
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="width: 20px; height: 15px; background: #d73027; border: 1px solid #000; margin-right: 10px;"></div>
+                <span>0.0-0.3: MUY BAJA</span>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="width: 20px; height: 15px; background: #fdae61; border: 1px solid #000; margin-right: 10px;"></div>
+                <span>0.3-0.5: BAJA</span>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="width: 20px; height: 15px; background: #a6d96a; border: 1px solid #000; margin-right: 10px;"></div>
+                <span>0.5-0.7: BUENA</span>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="width: 20px; height: 15px; background: #006837; border: 1px solid #000; margin-right: 10px;"></div>
+                <span>0.7-1.0: ÓPTIMA</span>
+            </div>
+        </div>
+    </div>
+    '''
 
-def crear_leyenda_ndvi_interactiva():
-    # Leyenda numérica para NDVI
-    colormap = cm.StepColormap(
-        colors=['#8B4513', '#FFD700', '#32CD32', '#006400'],
-        vmin=0, vmax=1,
-        index=[0.2, 0.4, 0.6, 1.0],
-        caption='NDVI (0-1)'
-    )
-    return colormap
-
-def crear_mapa_interactivo(gdf_analizado, mapa_base, colormap_npk, colormap_ndvi):
+def crear_mapa_interactivo(gdf_analizado, mapa_base):
     m = crear_mapa_base_esri(gdf_analizado, mapa_base)
 
     def estilo_zona(feature):
         npk = feature['properties'].get('npk_actual', 0.5)
-        color = colormap_npk(npk)
+        if npk < 0.3:
+            color = '#d73027'
+        elif npk < 0.5:
+            color = '#fdae61'
+        elif npk < 0.7:
+            color = '#a6d96a'
+        else:
+            color = '#006837'
         return {'fillColor': color, 'color': 'white', 'weight': 2, 'fillOpacity': 0.75}
 
     folium.GeoJson(
         gdf_analizado.__geo_interface__,
         name='Zonas NPK',
         style_function=estilo_zona,
-        tooltip=folium.GeoJsonTooltip(fields=['id_zona', 'npk_actual', 'ndvi', 'area_ha', 'categoria'], aliases=['Zona:', 'NPK:', 'NDVI:', 'Área (ha):', 'Estado:'], localize=True)
+        tooltip=folium.GeoJsonTooltip(
+            fields=['id_zona', 'npk_actual', 'ndvi', 'area_ha', 'categoria'],
+            aliases=['Zona:', 'NPK (0-1):', 'NDVI (0-1):', 'Área (ha):', 'Estado:'],
+            localize=True,
+            style="background: #2E7D32; color: white; border-radius: 8px; padding: 8px;"
+        )
     ).add_to(m)
 
-    # Agregar leyendas interactivas
-    colormap_npk.add_to(m)
-    colormap_ndvi.add_to(m)
+    # Leyenda simple con rangos
+    m.get_root().html.add_child(folium.Element(crear_leyenda_npk_simple()))
     folium.LayerControl().add_to(m)
     return m
 
 # =============================================================================
-# GENERADOR DE PDF
+# PDF SIMPLE (FALLBACK SI NO FPDF)
 # =============================================================================
-def generar_pdf_reporte(gdf_res, config, mapa_buffer):
+def generar_pdf_reporte(gdf_res, config):
+    if not FPDF_AVAILABLE:
+        st.warning("PDF no disponible. Usa CSV/GeoJSON.")
+        return None
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=16)
-    pdf.cell(200, 10, txt=f"Reporte Análisis {config['cultivo']} - {datetime.now().strftime('%d/%m/%Y')}", ln=1, align='C')
-    
-    # Métricas
+    pdf.cell(200, 10, txt=f"Reporte {config['cultivo']} - {datetime.now().strftime('%d/%m/%Y')}", ln=1, align='C')
     pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Área Total: {gdf_res['area_ha'].sum():.1f} ha | NPK Prom: {gdf_res['npk_actual'].mean():.3f} | NDVI Prom: {gdf_res['ndvi'].mean():.3f}", ln=1)
-    
-    # Imagen del mapa
-    pdf.image(mapa_buffer, x=10, y=30, w=190)
-    
-    # Gráfico de barras NDVI vs NPK
-    fig, ax = plt.subplots()
-    ax.bar(gdf_res['id_zona'], gdf_res['ndvi'], alpha=0.7, label='NDVI')
-    ax.bar(gdf_res['id_zona'], gdf_res['npk_actual'], alpha=0.7, label='NPK')
-    ax.set_title('Índices por Zona')
-    ax.legend()
+    pdf.cell(200, 10, txt=f"Área: {gdf_res['area_ha'].sum():.1f} ha | NPK: {gdf_res['npk_actual'].mean():.3f}", ln=1)
+    # Gráfico simple
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(gdf_res['id_zona'], gdf_res['npk_actual'], color='green', alpha=0.7)
+    ax.set_title('NPK por Zona')
+    ax.set_xlabel('Zona')
+    ax.set_ylabel('Índice NPK')
     buf = io.BytesIO()
-    fig.savefig(buf, format='png')
+    fig.savefig(buf, format='png', bbox_inches='tight')
     buf.seek(0)
-    pdf.image(buf, x=10, y=150, w=190)
+    pdf.image(buf, x=10, y=30, w=190)
     plt.close()
-    
-    # Tabla simple (categorías)
-    pdf.ln(20)
-    pdf.cell(200, 10, txt="Recomendaciones por Categoría:", ln=1)
-    for cat in gdf_res['categoria'].value_counts().items():
-        pdf.cell(200, 10, txt=f"{cat[0]}: {cat[1]} zonas ({cat[1]*100/len(gdf_res):.1f}%)", ln=1)
-    
+    # Tabla resumen
+    pdf.ln(80)
+    pdf.cell(200, 10, txt="Resumen por Categoría:", ln=1)
+    for cat, count in gdf_res['categoria'].value_counts().items():
+        pdf.cell(200, 10, txt=f"{cat}: {count} zonas ({count*100/len(gdf_res):.1f}%)", ln=1)
     buf_pdf = io.BytesIO()
     buf_pdf.write(pdf.output(dest='S').encode('latin1'))
     buf_pdf.seek(0)
     return buf_pdf
 
 # =============================================================================
-# FUNCIONES BÁSICAS (sin cambios mayores)
+# FUNCIONES BÁSICAS
 # =============================================================================
 def calcular_superficie(gdf):
     try:
@@ -258,7 +281,8 @@ def calcular_superficie(gdf):
         return gdf.geometry.area / 10000
 
 def dividir_parcela_en_zonas(gdf, n_zonas):
-    if len(gdf) == 0: return gdf
+    if len(gdf) == 0:
+        return gdf
     parcela = gdf.iloc[0].geometry
     bounds = parcela.bounds
     minx, miny, maxx, maxy = bounds
@@ -269,20 +293,24 @@ def dividir_parcela_en_zonas(gdf, n_zonas):
     height = (maxy - miny) / n_rows
     for i in range(n_rows):
         for j in range(n_cols):
-            if len(sub_poligonos) >= n_zonas: break
+            if len(sub_poligonos) >= n_zonas:
+                break
             cell = Polygon([(minx + j*width, miny + i*height), (minx + (j+1)*width, miny + i*height),
                             (minx + (j+1)*width, miny + (i+1)*height), (minx + j*width, miny + (i+1)*height)])
             inter = parcela.intersection(cell)
             if not inter.is_empty and inter.area > 0:
                 sub_poligonos.append(inter)
-    return gpd.GeoDataFrame({'id_zona': range(1, len(sub_poligonos)+1), 'geometry': sub_poligonos}, crs=gdf.crs)
+    if sub_poligonos:
+        return gpd.GeoDataFrame({'id_zona': range(1, len(sub_poligonos)+1), 'geometry': sub_poligonos}, crs=gdf.crs)
+    return gdf
 
-def calcular_indices_sentinel2(gdf_dividido, cultivo, fecha_imagen, config_sh):
+def calcular_indices_sentinel2(gdf_dividido, cultivo, fecha_imagen):
+    config_sh = get_sh_config()
     processor = SentinelHubProcessor(config_sh)
     resultados = []
     bounds = gdf_dividido.total_bounds
+    bbox = [bounds[0], bounds[1], bounds[2], bounds[3]]
     for idx, row in gdf_dividido.iterrows():
-        bbox = [bounds[0], bounds[1], bounds[2], bounds[3]]  # BBox global por simplicidad
         s2 = processor.get_real_indices(bbox, fecha_imagen)
         npk = (s2['ndvi'] * 0.4 + s2['ndre'] * 0.3 + (s2['lai']/6.0)*0.2 + s2['humedad_suelo']*0.1)
         npk = max(0, min(1, npk))
@@ -300,22 +328,19 @@ with st.sidebar:
     n_divisiones = st.slider("🎯 Número de Zonas:", 16, 48, 32, step=4)
     uploaded_zip = st.file_uploader("📤 ZIP Shapefile:", type=['zip'])
 
-# Config Sentinel Hub
-config_sh = get_sh_config()
-
 # =============================================================================
 # ANÁLISIS PRINCIPAL
 # =============================================================================
 def analisis_multicultivo_sentinel2(gdf, config):
     st.header(f"{ICONOS_CULTIVOS[config['cultivo']]} {config['cultivo']}")
-    st.markdown(f"**🛰️ {config_sh['fuente'] if config_sh else 'Simulado'} + ESRI**")
+    st.markdown("**🛰️ Sentinel-2 Datos + ESRI**")
 
     with st.spinner("📐 Dividiendo en zonas..."):
         gdf_zonas = dividir_parcela_en_zonas(gdf, config['n_divisiones'])
     st.success(f"✅ {len(gdf_zonas)} zonas creadas")
 
-    with st.spinner("🛰️ Procesando API Sentinel Hub..."):
-        indices = calcular_indices_sentinel2(gdf_zonas, config['cultivo'], config['fecha_sentinel'], config_sh)
+    with st.spinner("🛰️ Procesando datos..."):
+        indices = calcular_indices_sentinel2(gdf_zonas, config['cultivo'], config['fecha_sentinel'])
 
     areas = calcular_superficie(gdf_zonas)
     gdf_res = gdf_zonas.copy()
@@ -327,24 +352,19 @@ def analisis_multicultivo_sentinel2(gdf, config):
 
     # Métricas
     col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("🗺️ Zonas", len(gdf_res))
-    with col2: st.metric("📏 Área Total", f"{gdf_res['area_ha'].sum():.1f} ha")
-    with col3: st.metric("📊 NPK Promedio", f"{gdf_res['npk_actual'].mean():.3f}")
-    with col4: st.metric("🌿 NDVI Promedio", f"{gdf_res['ndvi'].mean():.3f}")
+    with col1:
+        st.metric("🗺️ Zonas", len(gdf_res))
+    with col2:
+        st.metric("📏 Área Total", f"{gdf_res['area_ha'].sum():.1f} ha")
+    with col3:
+        st.metric("📊 NPK Promedio", f"{gdf_res['npk_actual'].mean():.3f}")
+    with col4:
+        st.metric("🌿 NDVI Promedio", f"{gdf_res['ndvi'].mean():.3f}")
 
-    # Leyendas
-    colormap_npk = crear_leyenda_npk_interactiva()
-    colormap_ndvi = crear_leyenda_ndvi_interactiva()
-
-    # Mapa
-    st.subheader("🗺️ Mapa Interactivo con Leyendas Numéricas")
-    mapa = crear_mapa_interactivo(gdf_res, config['mapa_base'], colormap_npk, colormap_ndvi)
+    # Mapa con leyenda numérica
+    st.subheader("🗺️ Mapa Interactivo")
+    mapa = crear_mapa_interactivo(gdf_res, config['mapa_base'])
     folium_static(mapa, width="100%", height=600)
-
-    # Exportar mapa como imagen para PDF
-    mapa_buffer = io.BytesIO()
-    mapa.save(mapa_buffer, "png")
-    mapa_buffer.seek(0)
 
     # Tabla
     st.subheader("📋 Detalles por Zona")
@@ -352,58 +372,56 @@ def analisis_multicultivo_sentinel2(gdf, config):
     tabla.columns = ['Zona', 'Área (ha)', 'Índice NPK', 'NDVI', 'NDRE', 'Humedad Suelo', 'Estado']
     st.dataframe(tabla, use_container_width=True)
 
-    # PDF Reporte
-    st.subheader("📄 Generar Reporte PDF")
-    if st.button("📥 Descargar PDF Completo"):
-        pdf_buffer = generar_pdf_reporte(gdf_res, config, mapa_buffer)
-        st.download_button("📥 Descargar PDF", pdf_buffer.getvalue(), f"reporte_{config['cultivo']}_{datetime.now().strftime('%Y%m%d')}.pdf", "application/pdf")
-
-    # Otras descargas
-    col_dl1, col_dl2 = st.columns(2)
+    # Descargas
+    st.subheader("💾 Exportar")
+    col_dl1, col_dl2, col_dl3 = st.columns(3)
     with col_dl1:
         csv_data = gdf_res.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 CSV", csv_data, f"analisis_{config['cultivo']}_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
+        st.download_button("📥 CSV", csv_data, f"analisis_{config['cultivo']}.csv", "text/csv")
     with col_dl2:
         geojson_data = gdf_res.to_json()
-        st.download_button("🗺️ GeoJSON", geojson_data, f"zonas_{config['cultivo']}_{datetime.now().strftime('%Y%m%d')}.geojson", "application/json")
+        st.download_button("🗺️ GeoJSON", geojson_data, f"zonas_{config['cultivo']}.geojson", "application/json")
+    with col_dl3:
+        if FPDF_AVAILABLE:
+            pdf_buffer = generar_pdf_reporte(gdf_res, config)
+            if pdf_buffer:
+                st.download_button("📄 PDF Reporte", pdf_buffer.getvalue(), f"reporte_{config['cultivo']}.pdf", "application/pdf")
+        else:
+            st.info("📄 PDF: Instala fpdf2 para habilitar.")
 
 # =============================================================================
 # MAIN
 # =============================================================================
 if uploaded_zip is not None:
-    with st.spinner("📁 Cargando shapefile..."):
+    with st.spinner("📁 Cargando..."):
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 with zipfile.ZipFile(uploaded_zip, 'r') as zip_ref:
                     zip_ref.extractall(tmp_dir)
                 shp_files = [f for f in os.listdir(tmp_dir) if f.endswith('.shp')]
                 if not shp_files:
-                    st.error("❌ No se encontró archivo .shp en el ZIP.")
+                    st.error("❌ No .shp en ZIP.")
                 else:
                     shp_path = os.path.join(tmp_dir, shp_files[0])
                     gdf = gpd.read_file(shp_path)
                     if gdf.empty:
-                        st.error("❌ El shapefile está vacío.")
+                        st.error("❌ Shapefile vacío.")
                     else:
                         area_total = calcular_superficie(gdf).sum()
-                        col_info1, col_info2 = st.columns(2)
-                        with col_info1:
-                            st.success(f"✅ Parcela cargada: {area_total:.1f} ha")
-                        with col_info2:
-                            st.info(f"🌱 Cultivo: {cultivo} | 📅 Fecha: {fecha_sentinel.strftime('%d/%m/%Y')}")
-                        if st.button("🚀 EJECUTAR ANÁLISIS CON API REAL", type="primary", use_container_width=True):
+                        st.success(f"✅ Cargado: {area_total:.1f} ha")
+                        if st.button("🚀 ANALIZAR", type="primary"):
                             config = {'cultivo': cultivo, 'fecha_sentinel': fecha_sentinel, 'mapa_base': mapa_base, 'n_divisiones': n_divisiones}
                             analisis_multicultivo_sentinel2(gdf, config)
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
 else:
-    st.info("👆 Sube un ZIP con shapefile para análisis con API Sentinel Hub.")
-    with st.expander("ℹ️ Novedades"):
+    st.info("👆 Sube ZIP con shapefile.")
+    with st.expander("ℹ️ Info"):
         st.markdown("""
-        - **🛰️ API Real:** NDVI/NDRE desde Sentinel-2 L2A (10m, filtro nubes).
-        - **📄 PDF Reports:** Incluye mapa, gráficos, tabla y recomendaciones.
-        - **🎨 Leyendas Numéricas:** Rangos interactivos para NPK (0-1) y NDVI (0-1).
+        - **🛰️ Sentinel-2:** API real o simulación.
+        - **📄 PDF:** Reporte con gráficos y mapa.
+        - **🎨 Leyendas:** Rangos numéricos (0.0-1.0).
         """)
 
 st.markdown("---")
-st.markdown("*Powered by Sentinel Hub API + xAI*")
+st.markdown("*Powered by xAI + Sentinel Hub*")
