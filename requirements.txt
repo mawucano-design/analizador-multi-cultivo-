@@ -6,5 +6,5 @@ folium==0.16.0
 streamlit-folium==0.17.0
 shapely==2.0.4
 matplotlib==3.8.0
-pillow==10.2.0
+pillow==10.1.0
 requests==2.31.0
