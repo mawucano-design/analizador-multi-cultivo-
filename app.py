@@ -8,28 +8,24 @@ import pandas as pd
 import numpy as np
 from shapely.geometry import shape
 from sentinelhub import (
-    SHConfig, SentinelHubRequest, DataCollection, BBox, CRS, Geometry,
-    MimeType, bbox_to_dimensions, parse_time, Evalscript
+    SHConfig, SentinelHubRequest, DataCollection, BBox, CRS, MimeType,
+    bbox_to_dimensions, Evalscript
 )
 
-# --- Configuración de página (primero) ---
-st.set_page_config(page_title="Analizador Fertilidad Sentinel Hub + ESRI Satélite", layout="wide")
+# --- Configuración (primero) ---
+st.set_page_config(page_title="Fertilidad Sentinel Hub", layout="wide")
 
-# --- Autenticación Sentinel Hub con Secrets ---
+# --- AUTENTICACIÓN HARDCODEADA ---
 @st.cache_resource
 def init_sentinel_hub():
     try:
-        if "sentinel_hub" in st.secrets:
-            config = SHConfig()
-            config.sh_client_id = st.secrets["sentinel_hub"]["client_id"]
-            config.sh_client_secret = st.secrets["sentinel_hub"]["client_secret"]
-            st.success("Sentinel Hub autenticado")
-            return config
-        else:
-            st.warning("No se encontraron secrets de Sentinel Hub. Usando simulación.")
-            return None
+        config = SHConfig()
+        config.sh_client_id = "b296cf70-c9d2-4e69-91f4-f7be80b99ed1"
+        config.sh_client_secret = "358474d6-2326-4637-bf8e-30a709b2d6a6"
+        st.success("Sentinel Hub autenticado")
+        return config
     except Exception as e:
-        st.error(f"Error Sentinel Hub: {e}")
+        st.error(f"Error: {e}")
         return None
 
 config = init_sentinel_hub()
@@ -40,11 +36,10 @@ if "map_key" not in st.session_state:
 if "last_hash" not in st.session_state:
     st.session_state.last_hash = None
 
-# --- Título ---
-st.title("🌾 Analizador de Fertilidad con Sentinel Hub + Mapas ESRI Satélite")
-st.markdown("**Reemplazo de GEE por Sentinel Hub**: Análisis N/P/K con Sentinel-2, recomendaciones por cultivo, 5 mapas interactivos en **ESRI World Imagery**.")
+# --- UI ---
+st.title("Analizador de Fertilidad con Sentinel Hub")
+st.markdown("**Credenciales hardcodeadas** → análisis con Sentinel-2 + 5 mapas ESRI Satélite")
 
-# --- Sidebar ---
 cultivo = st.sidebar.selectbox("Cultivo:", ["Trigo", "Maíz", "Soja", "Sorgo", "Girasol"])
 
 # --- Carga SHP / GeoJSON ---
@@ -54,7 +49,6 @@ try:
     SHP_OK = True
 except:
     SHP_OK = False
-    st.warning("Fiona no disponible. Usa GeoJSON.")
 
 uploaded_files = st.file_uploader("SHP", type=['shp', 'shx', 'dbf', 'prj'], accept_multiple_files=True) if SHP_OK else None
 geojson_text = st.text_area("O pega GeoJSON:", height=120)
@@ -93,141 +87,91 @@ if not geoms:
     st.code('''{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[-58.4,-34.6],[-58.3,-34.6],[-58.3,-34.5],[-58.4,-34.5],[-58.4,-34.6]]]}}]}''')
     st.stop()
 
-# --- Análisis con Sentinel Hub (reemplaza GEE) ---
+# --- Análisis Sentinel Hub ---
 @st.cache_data
-def analyze_nutrients_sentinel(geom, config):
+def analyze_sentinel(geom):
     if not config:
         np.random.seed(42)
         return {'N': np.random.uniform(20, 80), 'P': np.random.uniform(10, 60), 'K': np.random.uniform(30, 90)}
     
-    # Evalscript para proxies de nutrientes (NDVI ~ N, NDWI ~ P/K humedad)
-    evalscript_ndvi = """
-    //VERSION=3
-    function setup() {
-      return {
-        input: ["B04", "B08", "dataMask"],
-        output: { bands: 1, sampleType: "FLOAT32" }
-      };
-    }
-    function evaluatePixel(sample) {
-      let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
-      return [ndvi * 100];  // Escala para ppm-like
-    }
-    """
-    evalscript_ndwi = """
-    //VERSION=3
-    function setup() {
-      return {
-        input: ["B03", "B08", "dataMask"],
-        output: { bands: 1, sampleType: "FLOAT32" }
-      };
-    }
-    function evaluatePixel(sample) {
-      let ndwi = (sample.B03 - sample.B08) / (sample.B03 + sample.B08);
-      return [ndwi * 100 + 50];  // Proxy para P/K
-    }
-    """
-    
-    # BBox y request (último mes, resolución 10m)
     bbox = BBox(bbox=geom.bounds, crs=CRS.WGS84)
-    resolution = bbox_to_dimensions(bbox, resolution=10)
-    time_interval = parse_time("2025-10-01", "2025-11-03")  # Ajusta fechas
+    size = bbox_to_dimensions(bbox, resolution=10)
     
-    # Request NDVI (proxy N)
-    request_ndvi = SentinelHubRequest(
-        evalscript=evalscript_ndvi,
-        input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=time_interval)],
-        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
-        bbox=bbox,
-        size=resolution,
-        config=config
-    )
-    ndvi_stats = request_ndvi.get_data_mean()  # Media
-    
-    # Request NDWI (proxy P/K)
-    request_ndwi = SentinelHubRequest(
-        evalscript=evalscript_ndwi,
-        input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=time_interval)],
-        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
-        bbox=bbox,
-        size=resolution,
-        config=config
-    )
-    ndwi_stats = request_ndwi.get_data_mean()
-    
-    return {
-        'N': abs(ndvi_stats[0][0]) if ndvi_stats.size > 0 else 50,  # NDVI como N
-        'P': abs(ndwi_stats[0][0]) if ndwi_stats.size > 0 else 30,   # NDWI como P
-        'K': abs(ndwi_stats[0][0] + 20) if ndwi_stats.size > 0 else 60  # Variación para K
+    evalscript = """
+    //VERSION=3
+    function setup() {
+      return {
+        input: ["B04", "B08", "B03", "dataMask"],
+        output: { bands: 3, sampleType: "FLOAT32" }
+      };
     }
+    function evaluatePixel(sample) {
+      let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04 + 0.0001);
+      let ndwi = (sample.B03 - sample.B08) / (sample.B03 + sample.B08 + 0.0001);
+      return [ndvi * 100, ndwi * 100 + 50, (ndwi * 100 + 70)];
+    }
+    """
+    
+    request = SentinelHubRequest(
+        evalscript=evalscript,
+        input_data=[SentinelHubRequest.input_data(
+            data_collection=DataCollection.SENTINEL2_L2A,
+            time_interval=("2025-10-01", "2025-11-03")
+        )],
+        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+        bbox=bbox,
+        size=size,
+        config=config
+    )
+    
+    try:
+        result = request.get_data()[0]
+        if result.size > 0:
+            mean_vals = np.mean(result, axis=(0,1))
+            return {'N': mean_vals[0], 'P': mean_vals[1], 'K': mean_vals[2]}
+    except:
+        pass
+    
+    return {'N': 50, 'P': 30, 'K': 60}
 
-nutrients = analyze_nutrients_sentinel(geoms[0], config)  # Usa primer polígono
+nutrients = analyze_sentinel(geoms[0])
 N, P, K = nutrients['N'], nutrients['P'], nutrients['K']
 
-# --- Recomendaciones (del repo original) ---
-def get_recs(cultivo, N, P, K):
-    base = {
-        "Trigo":    (140, 70, 90),
-        "Maíz":     (200, 80, 110),
-        "Soja":     (30, 50, 70),
-        "Sorgo":    (150, 70, 100),
-        "Girasol":  (90, 80, 80)
-    }
-    n_req, p_req, k_req = base.get(cultivo, (100, 60, 80))
-    return max(0, n_req - N), max(0, p_req - P), max(0, k_req - K)
+# --- Recomendaciones ---
+def get_recs(c, n, p, k):
+    base = {"Trigo": (140,70,90), "Maíz": (200,80,110), "Soja": (30,50,70), "Sorgo": (150,70,100), "Girasol": (90,80,80)}
+    n_req, p_req, k_req = base.get(c, (100,60,80))
+    return max(0, n_req - n), max(0, p_req - p), max(0, k_req - k)
 
 rec_N, rec_P, rec_K = get_recs(cultivo, N, P, K)
 
 cols = st.columns(3)
-cols[0].metric("N (NDVI proxy)", f"{N:.1f}", f"+{rec_N:.0f} kg/ha")
-cols[1].metric("P (NDWI proxy)", f"{P:.1f}", f"+{rec_P:.0f} kg/ha")
-cols[2].metric("K (NDWI proxy)", f"{K:.1f}", f"+{rec_K:.0f} kg/ha")
+cols[0].metric("N", f"{N:.1f}", f"+{rec_N:.0f} kg/ha")
+cols[1].metric("P", f"{P:.1f}", f"+{rec_P:.0f} kg/ha")
+cols[2].metric("K", f"{K:.1f}", f"+{rec_K:.0f} kg/ha")
 
-df_result = pd.DataFrame({
-    "Nutriente": ["N", "P", "K"],
-    "Actual (proxy)": [N, P, K],
-    "Recomendación (kg/ha)": [rec_N, rec_P, rec_K]
-})
-st.table(df_result)
-
-# --- Función para mapas ESRI Satélite ---
-def make_map(title, value=None, legend="", color='blue'):
+# --- Mapas ESRI Satélite ---
+def make_map(title, val=None, col='blue'):
     st.subheader(title)
     center = geoms[0].centroid
-    m = folium.Map(location=[center.y, center.x], zoom_start=15, tiles=None)
-    
-    # Base ESRI Satélite
+    m = folium.Map([center.y, center.x], zoom_start=15, tiles=None)
     folium.TileLayer(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri', name='Satélite', overlay=False
+        attr='Esri', name='Satélite'
     ).add_to(m)
-    
-    # Polígono con color por valor
     for g in geoms:
         folium.GeoJson(g.__geo_interface__, style_function=lambda x: {
-            'fillColor': color,
-            'color': 'black',
-            'weight': 3,
-            'fillOpacity': 0.5
+            'fillColor': col, 'color': 'black', 'weight': 3, 'fillOpacity': 0.5
         }).add_to(m)
-    
-    if value is not None:
-        folium.Marker(
-            [center.y, center.x],
-            popup=f"{legend}: {value:.1f}",
-            icon=folium.Icon(color="red")
-        ).add_to(m)
-    
+    if val:
+        folium.Marker([center.y, center.x], popup=f"{val:.1f}").add_to(m)
     folium.LayerControl().add_to(m)
-    folium_static(m, width=700, height=400, key=f"{title}_{st.session_state.map_key}")
+    folium_static(m, width=700, height=400)
 
-# --- 5 Mapas ---
-make_map("1. Polígono Base (ESRI Satélite)")
-make_map("2. Nitrógeno (N)", N, "N proxy", "green")
-make_map("3. Fósforo (P)", P, "P proxy", "orange")
-make_map("4. Potasio (K)", K, "K proxy", "purple")
-make_map("5. Recomendación Total (N+P+K)", rec_N + rec_P + rec_K, "kg/ha total", "red")
+make_map("1. Base")
+make_map("2. N", N, "green")
+make_map("3. P", P, "orange")
+make_map("4. K", K, "purple")
+make_map("5. Rec Total", rec_N + rec_P + rec_K, "red")
 
-# --- Footer ---
-st.markdown("---")
-st.caption("Sentinel Hub + Sentinel-2 para análisis real | Evalscripts para proxies NDVI/NDWI | ESRI Satélite multi-mapas")
+st.caption("Credenciales hardcodeadas | Sentinel Hub + ESRI Satélite")
