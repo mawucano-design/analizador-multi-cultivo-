@@ -71,10 +71,14 @@ CULTIVOS = {
 class SentinelAnalizador:
     def __init__(self, client_id, client_secret):
         """Inicializa el cliente de Sentinel Hub"""
-        self.config = SHConfig()
-        self.config.sh_client_id = client_id
-        self.config.sh_client_secret = client_secret
-        self.config.save()
+        try:
+            self.config = SHConfig()
+            self.config.sh_client_id = client_id
+            self.config.sh_client_secret = client_secret
+            self.config.save()
+            st.success("✅ Credenciales de Sentinel Hub configuradas")
+        except Exception as e:
+            st.error(f"❌ Error configurando Sentinel Hub: {str(e)}")
     
     def obtener_imagen_sentinel2(self, bbox, fecha_inicio, fecha_fin, tamaño=(512, 512)):
         """Obtiene imagen Sentinel-2 L2A para el área y fecha especificadas"""
@@ -107,7 +111,16 @@ class SentinelAnalizador:
         """
         
         try:
-            st.info("🛰️ Solicitando imagen Sentinel-2...")
+            st.info("🛰️ Conectando con Sentinel Hub...")
+            
+            # Verificar que el bbox sea válido
+            if not bbox:
+                st.error("❌ BBox inválido")
+                return None
+            
+            st.info(f"📍 Área: {bbox}")
+            st.info(f"📅 Período: {fecha_inicio} a {fecha_fin}")
+            
             request = SentinelHubRequest(
                 evalscript=evalscript,
                 input_data=[
@@ -123,10 +136,16 @@ class SentinelAnalizador:
                 config=self.config,
             )
             
+            st.info("📡 Descargando imagen Sentinel-2...")
             datos = request.get_data()
-            st.success("✅ Imagen obtenida correctamente")
-            return datos[0] if datos else None
             
+            if datos and len(datos) > 0:
+                st.success("✅ Imagen Sentinel-2 obtenida correctamente")
+                return datos[0]
+            else:
+                st.error("❌ No se recibieron datos de Sentinel Hub")
+                return None
+                
         except Exception as e:
             st.error(f"❌ Error obteniendo imagen Sentinel-2: {str(e)}")
             return None
@@ -134,26 +153,37 @@ class SentinelAnalizador:
     def calcular_indices(self, imagen):
         """Calcula índices de vegetación"""
         if imagen is None:
+            st.error("❌ No hay imagen para calcular índices")
             return None
             
         try:
-            st.info("📊 Calculando índices de vegetación...")
+            st.info("📊 Procesando índices de vegetación...")
+            
+            # Verificar dimensiones de la imagen
+            st.info(f"📏 Dimensiones de imagen: {imagen.shape}")
+            
             # La imagen tiene [R, G, B, NDVI]
             ndvi = imagen[:, :, 3]
             
             # Calcular NDWI
             verde = imagen[:, :, 1]
             nir = imagen[:, :, 3]
+            
             with np.errstate(divide='ignore', invalid='ignore'):
                 ndwi = (verde - nir) / (verde + nir)
                 ndwi = np.nan_to_num(ndwi, nan=0.0, posinf=1.0, neginf=-1.0)
             
-            st.success("✅ Índices calculados")
+            # Estadísticas básicas para debug
+            st.info(f"📈 NDVI - Media: {np.nanmean(ndvi):.3f}, Min: {np.nanmin(ndvi):.3f}, Max: {np.nanmax(ndvi):.3f}")
+            st.info(f"💧 NDWI - Media: {np.nanmean(ndwi):.3f}, Min: {np.nanmin(ndwi):.3f}, Max: {np.nanmax(ndwi):.3f}")
+            
+            st.success("✅ Índices calculados correctamente")
             return {
                 'ndvi': ndvi,
                 'ndwi': ndwi,
                 'rgb': imagen[:, :, :3]
             }
+            
         except Exception as e:
             st.error(f"❌ Error calculando índices: {str(e)}")
             return None
@@ -165,6 +195,7 @@ class SentinelAnalizador:
             
         try:
             st.info("🔍 Analizando salud del cultivo...")
+            
             ndvi = indices['ndvi']
             ndwi = indices['ndwi']
             
@@ -172,6 +203,8 @@ class SentinelAnalizador:
             mascara_valida = (ndvi > -1) & (ndvi < 1) & (ndwi > -1) & (ndwi < 1)
             ndvi_filtrado = ndvi[mascara_valida]
             ndwi_filtrado = ndwi[mascara_valida]
+            
+            st.info(f"🔢 Píxeles válidos encontrados: {len(ndvi_filtrado)}")
             
             if len(ndvi_filtrado) == 0:
                 st.warning("⚠️ No se encontraron píxeles válidos para análisis")
@@ -202,7 +235,7 @@ class SentinelAnalizador:
             
             salud_general = (ndvi_en_rango * 0.7 + ndwi_en_rango * 0.3) * 100
             
-            st.success("✅ Análisis completado")
+            st.success("✅ Análisis de salud completado")
             return {
                 'salud_general': salud_general,
                 'ndvi_stats': stats_ndvi,
@@ -220,16 +253,20 @@ class SentinelAnalizador:
 def procesar_archivo_subido(archivo):
     """Procesa archivos geoespaciales"""
     try:
+        st.info(f"📂 Procesando archivo: {archivo.name}")
+        
         if archivo.name.lower().endswith(('.geojson', '.json')):
             archivo.seek(0)
             geojson_data = json.load(archivo)
-            st.success("✅ GeoJSON cargado correctamente")
+            st.success(f"✅ GeoJSON cargado: {len(geojson_data.get('features', []))} features")
             return geojson_data
+            
         elif archivo.name.lower().endswith('.zip'):
             return procesar_archivo_zip(archivo.read(), archivo.name)
         else:
             st.error("❌ Formato no soportado")
             return None
+            
     except Exception as e:
         st.error(f"❌ Error procesando archivo: {str(e)}")
         return None
@@ -246,9 +283,12 @@ def procesar_archivo_zip(contenido_zip, nombre_archivo):
             if shp_files:
                 st.info("🔍 Procesando Shapefile...")
                 with tempfile.TemporaryDirectory() as temp_dir:
+                    # Extraer todos los archivos relacionados
                     for file in zip_ref.namelist():
-                        if file.startswith(os.path.splitext(shp_files[0])[0]):
+                        base_name = os.path.splitext(shp_files[0])[0]
+                        if file.startswith(base_name):
                             zip_ref.extract(file, temp_dir)
+                    
                     shp_path = os.path.join(temp_dir, shp_files[0])
                     gdf = gpd.read_file(shp_path)
                     st.success(f"✅ Shapefile procesado: {len(gdf)} features")
@@ -260,11 +300,12 @@ def procesar_archivo_zip(contenido_zip, nombre_archivo):
                 st.info(f"🔍 Procesando {geojson_files[0]}...")
                 with zip_ref.open(geojson_files[0]) as f:
                     geojson_data = json.load(f)
-                    st.success("✅ GeoJSON procesado")
+                    st.success(f"✅ GeoJSON procesado: {len(geojson_data.get('features', []))} features")
                     return geojson_data
             
             st.error("❌ No se encontraron archivos geoespaciales en el ZIP")
             return None
+            
     except Exception as e:
         st.error(f"❌ Error procesando ZIP: {str(e)}")
         return None
@@ -272,11 +313,22 @@ def procesar_archivo_zip(contenido_zip, nombre_archivo):
 def obtener_bbox_desde_geojson(geojson_data):
     """Obtiene el BBox desde GeoJSON"""
     try:
+        if not geojson_data or 'features' not in geojson_data or not geojson_data['features']:
+            st.error("❌ GeoJSON no contiene features")
+            return None
+            
         gdf = gpd.GeoDataFrame.from_features(geojson_data["features"])
         bounds = gdf.total_bounds
+        
+        # Verificar que las coordenadas sean válidas
+        if (bounds[0] >= bounds[2]) or (bounds[1] >= bounds[3]):
+            st.error("❌ Coordenadas del BBox inválidas")
+            return None
+            
         bbox = BBox(bbox=[bounds[0], bounds[1], bounds[2], bounds[3]], crs=CRS.WGS84)
         st.info(f"📍 Área de análisis: {bounds}")
         return bbox
+        
     except Exception as e:
         st.error(f"❌ Error obteniendo BBox: {str(e)}")
         return None
@@ -296,11 +348,11 @@ def crear_mapa_simple(geojson_data, resultados=None):
                     lats = [coord[1] for coord in coords]
                     lons = [coord[0] for coord in coords]
                     centro = [np.mean(lats), np.mean(lons)]
-            except:
-                pass
+            except Exception as e:
+                st.warning(f"⚠️ Usando centro por defecto: {str(e)}")
         
         # Crear mapa base
-        m = folium.Map(location=centro, zoom_start=10)
+        m = folium.Map(location=centro, zoom_start=12)
         
         # Agregar capas base
         folium.TileLayer(
@@ -332,11 +384,7 @@ def crear_mapa_simple(geojson_data, resultados=None):
                     'color': color,
                     'weight': 3,
                     'fillOpacity': 0.6,
-                },
-                tooltip=folium.GeoJsonTooltip(
-                    fields=['name'] if geojson_data['features'][0].get('properties', {}).get('name') else [],
-                    aliases=['Nombre:']
-                )
+                }
             ).add_to(m)
         
         # Controles básicos
@@ -375,6 +423,7 @@ def exportar_geojson(geojson_data, resultados, cultivo):
             })
         
         return geojson_export
+        
     except Exception as e:
         st.error(f"❌ Error exportando GeoJSON: {str(e)}")
         return None
@@ -419,23 +468,23 @@ def main():
         
         # Datos de entrada
         st.subheader("📁 Cargar Polígono")
-        st.warning("⚠️ **Debes cargar un archivo para comenzar**")
         
         archivo_subido = st.file_uploader(
             "Subir archivo geoespacial",
             type=['geojson', 'json', 'zip'],
-            help="GeoJSON, JSON o ZIP con Shapefile. Formatos soportados: .geojson, .json, .zip (con .shp)"
+            help="GeoJSON, JSON o ZIP con Shapefile"
         )
         
         if archivo_subido is not None:
-            with st.spinner("🔍 Procesando archivo..."):
-                nuevo_geojson = procesar_archivo_subido(archivo_subido)
-                if nuevo_geojson is not None:
-                    st.session_state.geojson_data = nuevo_geojson
-                    st.session_state.map_key += 1
-                    st.session_state.resultados = None
-                    st.session_state.analisis_completado = False
-                    st.rerun()
+            if st.session_state.geojson_data is None or st.button("🔄 Reprocesar archivo"):
+                with st.spinner("🔍 Procesando archivo..."):
+                    nuevo_geojson = procesar_archivo_subido(archivo_subido)
+                    if nuevo_geojson is not None:
+                        st.session_state.geojson_data = nuevo_geojson
+                        st.session_state.map_key += 1
+                        st.session_state.resultados = None
+                        st.session_state.analisis_completado = False
+                        st.rerun()
         
         # Período de análisis
         st.subheader("📅 Período de Análisis")
@@ -461,9 +510,14 @@ def main():
             if st.session_state.geojson_data is None:
                 st.error("❌ Primero debes cargar un archivo geoespacial")
             else:
-                with st.spinner("🛰️ Conectando con Sentinel Hub..."):
+                # Crear contenedor para mensajes de progreso
+                progress_container = st.empty()
+                
+                with progress_container.container():
+                    st.info("🔄 Iniciando análisis...")
+                    
                     try:
-                        # Inicializar analizador con credenciales automáticas
+                        # Inicializar analizador
                         analizador = SentinelAnalizador(SENTINEL_CLIENT_ID, SENTINEL_CLIENT_SECRET)
                         
                         # Obtener BBox
@@ -471,8 +525,6 @@ def main():
                         if not bbox:
                             st.error("❌ Error en el área de análisis")
                             return
-                        
-                        st.info(f"📡 Período: {fecha_inicio} a {fecha_fin}")
                         
                         # Obtener imagen
                         imagen = analizador.obtener_imagen_sentinel2(
@@ -485,18 +537,28 @@ def main():
                             st.error("❌ No se pudo obtener imagen Sentinel-2")
                             return
                         
-                        # Calcular índices y analizar
+                        # Calcular índices
                         indices = analizador.calcular_indices(imagen)
-                        if indices:
-                            st.session_state.resultados = analizador.analizar_salud_cultivo(indices, cultivo)
-                            st.session_state.analisis_completado = True
-                            st.session_state.map_key += 1
-                            st.rerun()
-                        else:
+                        if indices is None:
                             st.error("❌ Error en el cálculo de índices")
-                    
+                            return
+                        
+                        # Analizar salud
+                        resultados = analizador.analizar_salud_cultivo(indices, cultivo)
+                        if resultados is None:
+                            st.error("❌ Error en el análisis de salud")
+                            return
+                        
+                        # Guardar resultados
+                        st.session_state.resultados = resultados
+                        st.session_state.analisis_completado = True
+                        st.session_state.map_key += 1
+                        
+                        st.success("🎉 ¡Análisis completado exitosamente!")
+                        st.rerun()
+                        
                     except Exception as e:
-                        st.error(f"❌ Error en el análisis: {str(e)}")
+                        st.error(f"❌ Error durante el análisis: {str(e)}")
 
     # Contenido principal
     col1, col2 = st.columns([1, 1])
@@ -537,7 +599,7 @@ def main():
                         use_container_width=True
                     )
         else:
-            st.info("🗺️ **El mapa aparecerá aquí después de cargar un archivo**")
+            st.info("🗺️ **Carga un archivo para ver el mapa**")
     
     with col2:
         st.subheader("📊 Resultados del Análisis")
@@ -569,49 +631,41 @@ def main():
             st.subheader("💡 Recomendaciones")
             salud = resultados['salud_general']
             if salud >= 80:
-                st.success("**✅ EXCELENTE** - El cultivo está en condiciones óptimas. Continuar con el manejo actual.")
+                st.success("**✅ EXCELENTE** - El cultivo está en condiciones óptimas")
             elif salud >= 60:
-                st.warning("**🟡 BUENO** - Desarrollo adecuado. Mantener monitoreo y prácticas actuales.")
+                st.warning("**🟡 BUENO** - Desarrollo adecuado, mantener monitoreo")
             elif salud >= 40:
-                st.warning("**🟠 REGULAR** - Posible estrés. Revisar riego y fertilización.")
+                st.warning("**🟠 REGULAR** - Revisar riego y fertilización")
             else:
-                st.error("**🔴 CRÍTICO** - Revisión urgente requerida. Consultar con técnico agrícola.")
+                st.error("**🔴 CRÍTICO** - Revisión urgente requerida")
                 
+        elif st.session_state.geojson_data and not st.session_state.analisis_completado:
+            st.info("""
+            ## ⏳ Listo para analizar
+            
+            **Archivo cargado correctamente.**
+            
+            Para ejecutar el análisis:
+            1. Verifica el cultivo seleccionado
+            2. Revisa el período de análisis  
+            3. Haz clic en **"Ejecutar Análisis con Sentinel-2"**
+            
+            **El análisis puede tomar unos segundos.**
+            """)
         else:
-            # Estado inicial
-            if st.session_state.geojson_data:
-                st.info("""
-                ## ⏳ Listo para analizar
-                
-                **Archivo cargado correctamente.**
-                
-                Para ejecutar el análisis:
-                1. Verifica el cultivo seleccionado
-                2. Revisa el período de análisis  
-                3. Haz clic en **"Ejecutar Análisis con Sentinel-2"**
-                
-                **El análisis puede tomar unos segundos.**
-                """)
-            else:
-                st.info("""
-                ## 🚀 Bienvenido al Analizador
-                
-                **Para comenzar:**
-                1. **Selecciona el cultivo** en el panel izquierdo
-                2. **Carga un archivo geoespacial** con tu polígono
-                3. **Define el período** de análisis
-                4. **Ejecuta el análisis** con Sentinel-2
-                
-                **Formatos soportados:**
-                - 🔹 GeoJSON (.geojson, .json)
-                - 🔹 Shapefile (.zip con .shp, .dbf, .shx)
-                
-                **Características:**
-                - 🛰️ Imágenes reales Sentinel-2 L2A
-                - 📊 Análisis NDVI y NDWI
-                - 💡 Recomendaciones automáticas
-                - 📥 Exportación de resultados
-                """)
+            st.info("""
+            ## 🚀 Bienvenido al Analizador
+            
+            **Para comenzar:**
+            1. **Selecciona el cultivo** en el panel izquierdo
+            2. **Carga un archivo geoespacial** con tu polígono
+            3. **Define el período** de análisis
+            4. **Ejecuta el análisis** con Sentinel-2
+            
+            **Formatos soportados:**
+            - 🔹 GeoJSON (.geojson, .json)
+            - 🔹 Shapefile (.zip con .shp, .dbf, .shx)
+            """)
 
     # Footer
     st.markdown("---")
