@@ -1,33 +1,10 @@
 # Datos temporales
-data/resultados/temp/
-*.tmp
-*.temp
-
-# Archivos de sistema
-.DS_Store
-Thumbs.db
-
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
+*.pyo
+*.pyd
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.so
 
 # Entornos virtuales
 .env
@@ -36,8 +13,25 @@ env/
 venv/
 ENV/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# Archivos de mapa generados (opcional, si son grandes)
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Datos de usuario
+data/usuario/
+resultados/temp/
+
+# Logs
+*.log
+logs/
+
+# Archivos grandes (opcional)
 # *.html
+# *.geojson
