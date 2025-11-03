@@ -7,40 +7,56 @@ import json
 import pandas as pd
 import numpy as np
 from shapely.geometry import shape
-import ee  # Google Earth Engine
+from sentinelhub import (
+    SHConfig, SentinelHubRequest, DataCollection, BBox, CRS, Geometry,
+    MimeType, bbox_to_dimensions, parse_time, Evalscript
+)
 
-# Inicializar GEE (autenticación requerida)
-try:
-    ee.Initialize()
-    GEE_OK = True
-except Exception as e:
-    GEE_OK = False
-    st.warning(f"GEE no inicializado: {e}. Usando simulación.")
+# --- Configuración de página (primero) ---
+st.set_page_config(page_title="Analizador Fertilidad Sentinel Hub + ESRI Satélite", layout="wide")
 
-# --- Configuración ---
-st.set_page_config(page_title="Analizador Fertilidad GEE + ESRI Satélite", layout="wide")
+# --- Autenticación Sentinel Hub con Secrets ---
+@st.cache_resource
+def init_sentinel_hub():
+    try:
+        if "sentinel_hub" in st.secrets:
+            config = SHConfig()
+            config.sh_client_id = st.secrets["sentinel_hub"]["b296cf70-c9d2-4e69-91f4-f7be80b99ed1"]
+            config.sh_client_secret = st.secrets["sentinel_hub"]["358474d6-2326-4637-bf8e-30a709b2d6a6"]
+            st.success("Sentinel Hub autenticado")
+            return config
+        else:
+            st.warning("No se encontraron secrets de Sentinel Hub. Usando simulación.")
+            return None
+    except Exception as e:
+        st.error(f"Error Sentinel Hub: {e}")
+        return None
 
+config = init_sentinel_hub()
+
+# --- Session State ---
 if "map_key" not in st.session_state:
     st.session_state.map_key = 0
 if "last_hash" not in st.session_state:
     st.session_state.last_hash = None
 
 # --- Título ---
-st.title("🌾 Analizador de Fertilidad GEE + Mapas ESRI Satélite")
-st.markdown("Integración completa del repo original: Análisis N/P/K con GEE, recomendaciones por cultivo, mapas interactivos en **ESRI World Imagery (Satélite)** con overlays de resultados.")
+st.title("🌾 Analizador de Fertilidad con Sentinel Hub + Mapas ESRI Satélite")
+st.markdown("**Reemplazo de GEE por Sentinel Hub**: Análisis N/P/K con Sentinel-2, recomendaciones por cultivo, 5 mapas interactivos en **ESRI World Imagery**.")
 
 # --- Sidebar ---
 cultivo = st.sidebar.selectbox("Cultivo:", ["Trigo", "Maíz", "Soja", "Sorgo", "Girasol"])
 
 # --- Carga SHP / GeoJSON ---
-st.header("Carga Polígono (SHP o GeoJSON)")
+st.header("Carga Polígono")
 try:
     import fiona
     SHP_OK = True
 except:
     SHP_OK = False
+    st.warning("Fiona no disponible. Usa GeoJSON.")
 
-uploaded_files = st.file_uploader("Archivos SHP", type=['shp', 'shx', 'dbf', 'prj'], accept_multiple_files=True) if SHP_OK else None
+uploaded_files = st.file_uploader("SHP", type=['shp', 'shx', 'dbf', 'prj'], accept_multiple_files=True) if SHP_OK else None
 geojson_text = st.text_area("O pega GeoJSON:", height=120)
 
 # --- Procesar geometría ---
@@ -50,7 +66,6 @@ if current_hash != st.session_state.last_hash:
     st.session_state.last_hash = current_hash
     st.session_state.map_key += 1
 
-# SHP
 if SHP_OK and uploaded_files:
     shp = next((f for f in uploaded_files if f.name.endswith('.shp')), None)
     if shp:
@@ -65,12 +80,10 @@ if SHP_OK and uploaded_files:
             except Exception as e:
                 st.error(f"Error SHP: {e}")
 
-# GeoJSON
 if not geoms and geojson_text.strip():
     try:
         data = json.loads(geojson_text)
-        features = data.get('features', [])
-        geoms = [shape(f['geometry']) for f in features if 'geometry' in f]
+        geoms = [shape(f['geometry']) for f in data.get('features', []) if 'geometry' in f]
         st.success(f"GeoJSON: {len(geoms)} polígonos")
     except Exception as e:
         st.error(f"Error GeoJSON: {e}")
@@ -80,149 +93,141 @@ if not geoms:
     st.code('''{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[-58.4,-34.6],[-58.3,-34.6],[-58.3,-34.5],[-58.4,-34.5],[-58.4,-34.6]]]}}]}''')
     st.stop()
 
-# --- Función del repo original: Análisis GEE de nutrientes ---
+# --- Análisis con Sentinel Hub (reemplaza GEE) ---
 @st.cache_data
-def analyze_nutrients_gee(geometry, cultivo):
-    if not GEE_OK:
-        # Simulación (del repo original)
+def analyze_nutrients_sentinel(geom, config):
+    if not config:
         np.random.seed(42)
-        return {
-            'N': np.random.uniform(20, 80),
-            'P': np.random.uniform(10, 60),
-            'K': np.random.uniform(30, 90)
-        }
+        return {'N': np.random.uniform(20, 80), 'P': np.random.uniform(10, 60), 'K': np.random.uniform(30, 90)}
     
-    # Lógica GEE real (basada en repo original: usa OpenLandMap para nutrientes)
-    ee_geom = ee.Geometry.Polygon([[[coord[0], coord[1]] for coord in poly.exterior.coords] for poly in geoms][0])
-    
-    # Cargar imágenes GEE (ej. N, P, K de OpenLandMap)
-    n_image = ee.Image("OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-4A1A2A/SOL_ORGCOBT_N.v2").select('b0').clip(ee_geom)
-    p_image = ee.Image("OpenLandMap/SOL/SOL_PH-H2O_USDA-4C1A1A/SOL_PHCLABO_M.v2").select('b0').clip(ee_geom)  # Proxy para P
-    k_image = ee.Image("OpenLandMap/SOL/SOL_CLAY-WFRA-USDA-4B1B/SOL_CLAYFRA_N.v2").select('b0').clip(ee_geom)  # Proxy para K
-    
-    # Reducir a media en el polígono
-    scale = 30
-    n_mean = n_image.reduceRegion(reducer=ee.Reducer.mean(), geometry=ee_geom, scale=scale, maxPixels=1e9).getInfo()['b0']
-    p_mean = p_image.reduceRegion(reducer=ee.Reducer.mean(), geometry=ee_geom, scale=scale, maxPixels=1e9).getInfo()['b0']
-    k_mean = k_image.reduceRegion(reducer=ee.Reducer.mean(), geometry=ee_geom, scale=scale, maxPixels=1e9).getInfo()['b0']
-    
-    return {'N': n_mean or 50, 'P': p_mean or 30, 'K': k_mean or 60}
-
-# --- Función del repo original: Recomendaciones por cultivo ---
-def get_recommendations(n, p, k, cultivo):
-    thresholds = {
-        "Trigo": {'N': 120, 'P': 60, 'K': 80},
-        "Maíz": {'N': 200, 'P': 80, 'K': 100},
-        "Soja": {'N': 20, 'P': 40, 'K': 60},
-        "Sorgo": {'N': 140, 'P': 60, 'K': 90},
-        "Girasol": {'N': 80, 'P': 70, 'K': 70}
+    # Evalscript para proxies de nutrientes (NDVI ~ N, NDWI ~ P/K humedad)
+    evalscript_ndvi = """
+    //VERSION=3
+    function setup() {
+      return {
+        input: ["B04", "B08", "dataMask"],
+        output: { bands: 1, sampleType: "FLOAT32" }
+      };
     }
-    base = thresholds.get(cultivo, {'N': 100, 'P': 50, 'K': 70})
+    function evaluatePixel(sample) {
+      let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
+      return [ndvi * 100];  // Escala para ppm-like
+    }
+    """
+    evalscript_ndwi = """
+    //VERSION=3
+    function setup() {
+      return {
+        input: ["B03", "B08", "dataMask"],
+        output: { bands: 1, sampleType: "FLOAT32" }
+      };
+    }
+    function evaluatePixel(sample) {
+      let ndwi = (sample.B03 - sample.B08) / (sample.B03 + sample.B08);
+      return [ndwi * 100 + 50];  // Proxy para P/K
+    }
+    """
+    
+    # BBox y request (último mes, resolución 10m)
+    bbox = BBox(bbox=geom.bounds, crs=CRS.WGS84)
+    resolution = bbox_to_dimensions(bbox, resolution=10)
+    time_interval = parse_time("2025-10-01", "2025-11-03")  # Ajusta fechas
+    
+    # Request NDVI (proxy N)
+    request_ndvi = SentinelHubRequest(
+        evalscript=evalscript_ndvi,
+        input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=time_interval)],
+        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+        bbox=bbox,
+        size=resolution,
+        config=config
+    )
+    ndvi_stats = request_ndvi.get_data_mean()  # Media
+    
+    # Request NDWI (proxy P/K)
+    request_ndwi = SentinelHubRequest(
+        evalscript=evalscript_ndwi,
+        input_data=[SentinelHubRequest.input_data(data_collection=DataCollection.SENTINEL2_L2A, time_interval=time_interval)],
+        responses=[SentinelHubRequest.output_response('default', MimeType.TIFF)],
+        bbox=bbox,
+        size=resolution,
+        config=config
+    )
+    ndwi_stats = request_ndwi.get_data_mean()
+    
     return {
-        'rec_N': max(0, base['N'] - n),
-        'rec_P': max(0, base['P'] - p),
-        'rec_K': max(0, base['K'] - k)
+        'N': abs(ndvi_stats[0][0]) if ndvi_stats.size > 0 else 50,  # NDVI como N
+        'P': abs(ndwi_stats[0][0]) if ndwi_stats.size > 0 else 30,   # NDWI como P
+        'K': abs(ndwi_stats[0][0] + 20) if ndwi_stats.size > 0 else 60  # Variación para K
     }
 
-# --- Análisis ---
-if geoms:
-    area = sum(g.area for g in geoms)
-    st.metric("Área", f"{area:.6f} unidades²")
+nutrients = analyze_nutrients_sentinel(geoms[0], config)  # Usa primer polígono
+N, P, K = nutrients['N'], nutrients['P'], nutrients['K']
 
-    st.header("🔬 Análisis de Nutrientes (GEE)")
-    nutrients = analyze_nutrients_gee(geoms, cultivo)
-    N, P, K = nutrients['N'], nutrients['P'], nutrients['K']
-    recs = get_recommendations(N, P, K, cultivo)
-    rec_N, rec_P, rec_K = recs['rec_N'], recs['rec_P'], recs['rec_K']
+# --- Recomendaciones (del repo original) ---
+def get_recs(cultivo, N, P, K):
+    base = {
+        "Trigo":    (140, 70, 90),
+        "Maíz":     (200, 80, 110),
+        "Soja":     (30, 50, 70),
+        "Sorgo":    (150, 70, 100),
+        "Girasol":  (90, 80, 80)
+    }
+    n_req, p_req, k_req = base.get(cultivo, (100, 60, 80))
+    return max(0, n_req - N), max(0, p_req - P), max(0, k_req - K)
 
-    cols = st.columns(3)
-    cols[0].metric("N", f"{N:.1f} ppm", f"+{rec_N:.0f} kg/ha")
-    cols[1].metric("P", f"{P:.1f} ppm", f"+{rec_P:.0f} kg/ha")
-    cols[2].metric("K", f"{K:.1f} ppm", f"+{rec_K:.0f} kg/ha")
+rec_N, rec_P, rec_K = get_recs(cultivo, N, P, K)
 
-    df_result = pd.DataFrame({
-        "Nutriente": ["N", "P", "K"],
-        "Actual (ppm)": [N, P, K],
-        "Recomendación (kg/ha)": [rec_N, rec_P, rec_K]
-    })
-    st.table(df_result)
+cols = st.columns(3)
+cols[0].metric("N (NDVI proxy)", f"{N:.1f}", f"+{rec_N:.0f} kg/ha")
+cols[1].metric("P (NDWI proxy)", f"{P:.1f}", f"+{rec_P:.0f} kg/ha")
+cols[2].metric("K (NDWI proxy)", f"{K:.1f}", f"+{rec_K:.0f} kg/ha")
 
-    # --- Función para crear mapa ESRI Satélite ---
-    def create_esri_sat_map(geoms, center, extra_layers=None):
-        m = folium.Map(location=center, zoom_start=15, tiles=None)
-        
-        # Base ESRI Satélite (por defecto)
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            attr='Esri',
-            name='ESRI Satélite'
-        ).add_to(m)
-        
-        # Alternativa: ESRI Calles
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-            attr='Esri',
-            name='ESRI Calles'
-        ).add_to(m)
-        
-        # Polígono base
-        for g in geoms:
-            folium.GeoJson(
-                g.__geo_interface__,
-                style_function=lambda x: {'fillColor': 'blue', 'color': 'black', 'weight': 2, 'fillOpacity': 0.2}
-            ).add_to(m)
-        
-        # Capas extras (nutrientes/recomendaciones)
-        if extra_layers:
-            for layer_data in extra_layers:
-                folium.Choropleth(
-                    geo_data=geojson_data,  # Global para simplicidad
-                    data=layer_data['data'],
-                    columns=['feature', 'value'],
-                    key_on='feature',
-                    fill_color='YlOrRd',
-                    legend_name=layer_data['name']
-                ).add_to(m)
-        
-        folium.LayerControl().add_to(m)
-        return m
+df_result = pd.DataFrame({
+    "Nutriente": ["N", "P", "K"],
+    "Actual (proxy)": [N, P, K],
+    "Recomendación (kg/ha)": [rec_N, rec_P, rec_K]
+})
+st.table(df_result)
 
-    # GeoJSON para choropleth
-    geojson_data = {"type": "FeatureCollection", "features": [{"type": "Feature", "id": "poly1", "geometry": g.__geo_interface__} for g in geoms[:1]]}  # Asume 1 poly para demo
-
+# --- Función para mapas ESRI Satélite ---
+def make_map(title, value=None, legend="", color='blue'):
+    st.subheader(title)
     center = geoms[0].centroid
-    center_coords = [center.y, center.x]
+    m = folium.Map(location=[center.y, center.x], zoom_start=15, tiles=None)
+    
+    # Base ESRI Satélite
+    folium.TileLayer(
+        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attr='Esri', name='Satélite', overlay=False
+    ).add_to(m)
+    
+    # Polígono con color por valor
+    for g in geoms:
+        folium.GeoJson(g.__geo_interface__, style_function=lambda x: {
+            'fillColor': color,
+            'color': 'black',
+            'weight': 3,
+            'fillOpacity': 0.5
+        }).add_to(m)
+    
+    if value is not None:
+        folium.Marker(
+            [center.y, center.x],
+            popup=f"{legend}: {value:.1f}",
+            icon=folium.Icon(color="red")
+        ).add_to(m)
+    
+    folium.LayerControl().add_to(m)
+    folium_static(m, width=700, height=400, key=f"{title}_{st.session_state.map_key}")
 
-    # --- Mapa 1: Base Polígono en ESRI Satélite ---
-    st.subheader("🗺️ 1. Polígono Base (ESRI Satélite)")
-    m1 = create_esri_sat_map(geoms, center_coords)
-    folium_static(m1, width=700, height=400, key=f"m1_{st.session_state.map_key}")
-
-    # --- Mapa 2: Niveles de N ---
-    st.subheader("🗺️ 2. Niveles de N (Choropleth en ESRI Satélite)")
-    m2 = create_esri_sat_map(geoms, center_coords, extra_layers=[{'data': pd.DataFrame({'feature': ['poly1'], 'value': [N]}), 'name': 'N ppm'}])
-    folium_static(m2, width=700, height=400, key=f"m2_{st.session_state.map_key}")
-
-    # --- Mapa 3: Niveles de P ---
-    st.subheader("🗺️ 3. Niveles de P (Choropleth en ESRI Satélite)")
-    m3 = create_esri_sat_map(geoms, center_coords, extra_layers=[{'data': pd.DataFrame({'feature': ['poly1'], 'value': [P]}), 'name': 'P ppm'}])
-    folium_static(m3, width=700, height=400, key=f"m3_{st.session_state.map_key}")
-
-    # --- Mapa 4: Niveles de K ---
-    st.subheader("🗺️ 4. Niveles de K (Choropleth en ESRI Satélite)")
-    m4 = create_esri_sat_map(geoms, center_coords, extra_layers=[{'data': pd.DataFrame({'feature': ['poly1'], 'value': [K]}), 'name': 'K ppm'}])
-    folium_static(m4, width=700, height=400, key=f"m4_{st.session_state.map_key}")
-
-    # --- Mapa 5: Recomendaciones ---
-    st.subheader("🗺️ 5. Recomendaciones de Fertilizante (Overlay en ESRI Satélite)")
-    rec_data = pd.DataFrame({'feature': ['poly1'], 'rec_N': [rec_N], 'rec_P': [rec_P], 'rec_K': [rec_K]})
-    m5 = create_esri_sat_map(geoms, center_coords, extra_layers=[
-        {'data': rec_data[['feature', 'rec_N']], 'name': 'Rec N kg/ha'},
-        {'data': rec_data[['feature', 'rec_P']], 'name': 'Rec P kg/ha'},
-        {'data': rec_data[['feature', 'rec_K']], 'name': 'Rec K kg/ha'}
-    ])
-    folium_static(m5, width=700, height=400, key=f"m5_{st.session_state.map_key}")
+# --- 5 Mapas ---
+make_map("1. Polígono Base (ESRI Satélite)")
+make_map("2. Nitrógeno (N)", N, "N proxy", "green")
+make_map("3. Fósforo (P)", P, "P proxy", "orange")
+make_map("4. Potasio (K)", K, "K proxy", "purple")
+make_map("5. Recomendación Total (N+P+K)", rec_N + rec_P + rec_K, "kg/ha total", "red")
 
 # --- Footer ---
 st.markdown("---")
-st.caption("Basado en repo original GEE + ESRI Satélite multi-mapas | Autentica GEE para datos reales")
+st.caption("Sentinel Hub + Sentinel-2 para análisis real | Evalscripts para proxies NDVI/NDWI | ESRI Satélite multi-mapas")
