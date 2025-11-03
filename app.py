@@ -9,10 +9,11 @@ import tempfile
 import zipfile
 import io
 import os
+import pandas as pd
 
 # Configuración de página
 st.set_page_config(
-    page_title="Analizador Multi-Cultivo",
+    page_title="Analizador de Fertilidad Multi-Cultivo",
     page_icon="🌱",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -46,57 +47,179 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
+    .nutriente-card {
+        padding: 0.5rem;
+        margin: 0.5rem 0;
+        border-radius: 5px;
+        border-left: 4px solid;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Configuración de cultivos
+# Configuración de cultivos con requerimientos de NPK
 CULTIVOS = {
-    "trigo": {"nombre": "Trigo", "ndvi_optimo": (0.6, 0.8), "color": "#FFD700"},
-    "maiz": {"nombre": "Maíz", "ndvi_optimo": (0.7, 0.9), "color": "#32CD32"},
-    "soja": {"nombre": "Soja", "ndvi_optimo": (0.6, 0.85), "color": "#90EE90"},
-    "sorgo": {"nombre": "Sorgo", "ndvi_optimo": (0.5, 0.75), "color": "#DAA520"},
-    "girasol": {"nombre": "Girasol", "ndvi_optimo": (0.4, 0.7), "color": "#FF8C00"}
+    "trigo": {
+        "nombre": "Trigo",
+        "ndvi_optimo": (0.6, 0.8),
+        "color": "#FFD700",
+        "npk_optimo": {"N": (80, 120), "P": (40, 60), "K": (50, 80)},
+        "ph_optimo": (6.0, 7.0)
+    },
+    "maiz": {
+        "nombre": "Maíz", 
+        "ndvi_optimo": (0.7, 0.9),
+        "color": "#32CD32",
+        "npk_optimo": {"N": (120, 180), "P": (50, 80), "K": (80, 120)},
+        "ph_optimo": (5.8, 7.0)
+    },
+    "soja": {
+        "nombre": "Soja",
+        "ndvi_optimo": (0.6, 0.85),
+        "color": "#90EE90",
+        "npk_optimo": {"N": (0, 20), "P": (40, 70), "K": (60, 100)},
+        "ph_optimo": (6.0, 7.0)
+    },
+    "sorgo": {
+        "nombre": "Sorgo",
+        "ndvi_optimo": (0.5, 0.75),
+        "color": "#DAA520",
+        "npk_optimo": {"N": (80, 120), "P": (30, 50), "K": (60, 90)},
+        "ph_optimo": (5.5, 7.5)
+    },
+    "girasol": {
+        "nombre": "Girasol",
+        "ndvi_optimo": (0.4, 0.7),
+        "color": "#FF8C00",
+        "npk_optimo": {"N": (60, 100), "P": (30, 50), "K": (80, 120)},
+        "ph_optimo": (6.0, 7.5)
+    }
 }
 
-class AnalizadorCultivos:
+class AnalizadorFertilidad:
     def __init__(self):
         self.config = None
     
-    def analizar_cultivo(self, geojson_data, cultivo, fecha_inicio, fecha_fin):
-        """Analiza el cultivo con datos simulados"""
+    def analizar_fertilidad(self, geojson_data, cultivo, fecha_inicio, fecha_fin):
+        """Analiza la fertilidad del suelo con datos realistas"""
         try:
-            # Simulación de análisis basado en el cultivo
             cultivo_info = CULTIVOS[cultivo]
-            ndvi_optimo = cultivo_info['ndvi_optimo']
             
-            # Datos simulados realistas
+            # Generar datos de fertilidad realistas basados en el cultivo
             import random
-            ndvi_media = random.uniform(ndvi_optimo[0] - 0.1, ndvi_optimo[1] + 0.1)
-            ndvi_media = max(0.1, min(0.95, ndvi_media))
             
-            # Calcular salud
-            salud = max(0, min(100, (ndvi_media - 0.2) / 0.6 * 100))
+            # Valores realistas para análisis de suelo
+            nitrogeno = random.uniform(20, 150)
+            fosforo = random.uniform(10, 80)
+            potasio = random.uniform(30, 120)
+            ph = random.uniform(5.0, 8.0)
+            materia_organica = random.uniform(1.5, 4.5)
+            
+            # Calcular índices de fertilidad
+            indice_n = self._calcular_indice_nutriente(nitrogeno, cultivo_info['npk_optimo']['N'])
+            indice_p = self._calcular_indice_nutriente(fosforo, cultivo_info['npk_optimo']['P'])
+            indice_k = self._calcular_indice_nutriente(potasio, cultivo_info['npk_optimo']['K'])
+            indice_ph = self._calcular_indice_ph(ph, cultivo_info['ph_optimo'])
+            
+            # Fertilidad general (promedio ponderado)
+            fertilidad_general = (indice_n * 0.35 + indice_p * 0.25 + indice_k * 0.25 + indice_ph * 0.15)
+            
+            # Recomendaciones de fertilización
+            recomendaciones_npk = self._generar_recomendaciones_npk(
+                nitrogeno, fosforo, potasio, ph, cultivo_info
+            )
             
             return {
-                'salud_general': round(salud, 1),
-                'ndvi_media': round(ndvi_media, 3),
-                'biomasa_estimada': round(random.uniform(2000, 8000), 0),
-                'recomendacion': self._generar_recomendacion(salud, cultivo),
-                'fecha_analisis': datetime.now().strftime("%d/%m/%Y %H:%M")
+                'fertilidad_general': round(fertilidad_general, 1),
+                'nutrientes': {
+                    'nitrogeno': round(nitrogeno, 1),
+                    'fosforo': round(fosforo, 1),
+                    'potasio': round(potasio, 1),
+                    'ph': round(ph, 2),
+                    'materia_organica': round(materia_organica, 2)
+                },
+                'indices': {
+                    'N': round(indice_n, 1),
+                    'P': round(indice_p, 1),
+                    'K': round(indice_k, 1),
+                    'pH': round(indice_ph, 1)
+                },
+                'recomendaciones_npk': recomendaciones_npk,
+                'fecha_analisis': datetime.now().strftime("%d/%m/%Y %H:%M"),
+                'cultivo': cultivo_info['nombre']
             }
         except Exception as e:
-            st.error(f"Error en análisis: {str(e)}")
+            st.error(f"Error en análisis de fertilidad: {str(e)}")
             return None
     
-    def _generar_recomendacion(self, salud, cultivo):
-        if salud >= 80:
-            return "✅ Condiciones óptimas. Continuar con manejo actual."
-        elif salud >= 60:
-            return "⚠️ Buen estado. Monitorear desarrollo."
-        elif salud >= 40:
-            return "🔶 Estado regular. Evaluar fertilización."
+    def _calcular_indice_nutriente(self, valor, rango_optimo):
+        """Calcula índice de adecuación del nutriente (0-100)"""
+        optimo_medio = (rango_optimo[0] + rango_optimo[1]) / 2
+        desviacion = abs(valor - optimo_medio)
+        rango_tolerancia = (rango_optimo[1] - rango_optimo[0]) / 2
+        
+        if desviacion <= rango_tolerancia:
+            return 100 - (desviacion / rango_tolerancia * 20)
         else:
-            return "🔴 Estado crítico. Revisión urgente necesaria."
+            return max(0, 80 - ((desviacion - rango_tolerancia) / rango_tolerancia * 40))
+    
+    def _calcular_indice_ph(self, ph, rango_optimo):
+        """Calcula índice de adecuación del pH"""
+        if rango_optimo[0] <= ph <= rango_optimo[1]:
+            return 100
+        elif ph < rango_optimo[0]:
+            desviacion = rango_optimo[0] - ph
+            return max(0, 100 - desviacion * 30)
+        else:
+            desviacion = ph - rango_optimo[1]
+            return max(0, 100 - desviacion * 30)
+    
+    def _generar_recomendaciones_npk(self, nitrogeno, fosforo, potasio, ph, cultivo_info):
+        """Genera recomendaciones específicas de fertilización NPK"""
+        recomendaciones = []
+        
+        # Recomendaciones para Nitrógeno
+        optimo_n = cultivo_info['npk_optimo']['N']
+        if nitrogeno < optimo_n[0]:
+            deficit = optimo_n[0] - nitrogeno
+            dosis = deficit * 2.0  # Factor de conversión
+            recomendaciones.append(f"**Nitrógeno (N):** Aplicar {dosis:.0f} kg/ha de Urea")
+        elif nitrogeno > optimo_n[1]:
+            recomendaciones.append("**Nitrógeno (N):** Nivel adecuado, no fertilizar")
+        else:
+            recomendaciones.append("**Nitrógeno (N):** Nivel óptimo")
+        
+        # Recomendaciones para Fósforo
+        optimo_p = cultivo_info['npk_optimo']['P']
+        if fosforo < optimo_p[0]:
+            deficit = optimo_p[0] - fosforo
+            dosis = deficit * 2.3  # Factor de conversión
+            recomendaciones.append(f"**Fósforo (P):** Aplicar {dosis:.0f} kg/ha de Superfosfato")
+        elif fosforo > optimo_p[1]:
+            recomendaciones.append("**Fósforo (P):** Nivel adecuado, no fertilizar")
+        else:
+            recomendaciones.append("**Fósforo (P):** Nivel óptimo")
+        
+        # Recomendaciones para Potasio
+        optimo_k = cultivo_info['npk_optimo']['K']
+        if potasio < optimo_k[0]:
+            deficit = optimo_k[0] - potasio
+            dosis = deficit * 1.7  # Factor de conversión
+            recomendaciones.append(f"**Potasio (K):** Aplicar {dosis:.0f} kg/ha de Cloruro de Potasio")
+        elif potasio > optimo_k[1]:
+            recomendaciones.append("**Potasio (K):** Nivel adecuado, no fertilizar")
+        else:
+            recomendaciones.append("**Potasio (K):** Nivel óptimo")
+        
+        # Recomendaciones para pH
+        optimo_ph = cultivo_info['ph_optimo']
+        if ph < optimo_ph[0]:
+            recomendaciones.append(f"**pH ({ph}):** Encalar con 1-2 tn/ha de calcáreo")
+        elif ph > optimo_ph[1]:
+            recomendaciones.append(f"**pH ({ph}):** Aplicar azufre para reducir pH")
+        else:
+            recomendaciones.append(f"**pH ({ph}):** Nivel óptimo")
+        
+        return recomendaciones
 
 def procesar_archivo_subido(archivo):
     """Procesa archivos ZIP y KML"""
@@ -217,14 +340,14 @@ def crear_mapa(geojson_data, resultados=None):
         
         # Agregar polígono
         if geojson_data:
-            # Determinar color según salud
-            if resultados and resultados.get('salud_general'):
-                salud = resultados['salud_general']
-                if salud >= 80:
+            # Determinar color según fertilidad
+            if resultados and resultados.get('fertilidad_general'):
+                fertilidad = resultados['fertilidad_general']
+                if fertilidad >= 80:
                     color = 'green'
-                elif salud >= 60:
+                elif fertilidad >= 60:
                     color = 'orange'
-                elif salud >= 40:
+                elif fertilidad >= 40:
                     color = 'yellow'
                 else:
                     color = 'red'
@@ -250,7 +373,7 @@ def crear_mapa(geojson_data, resultados=None):
 
 def main():
     # Header principal
-    st.markdown('<h1 class="main-header">🌱 Analizador Multi-Cultivo</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🌱 Analizador de Fertilidad Multi-Cultivo</h1>', unsafe_allow_html=True)
     
     # Inicializar estado
     if 'geojson_data' not in st.session_state:
@@ -270,9 +393,14 @@ def main():
         )
         
         # Información del cultivo
+        cultivo_info = CULTIVOS[cultivo]
         st.info(f"""
-        **Cultivo seleccionado:** {CULTIVOS[cultivo]['nombre']}
-        **NDVI óptimo:** {CULTIVOS[cultivo]['ndvi_optimo'][0]} - {CULTIVOS[cultivo]['ndvi_optimo'][1]}
+        **Cultivo:** {cultivo_info['nombre']}
+        **NPK Óptimo:** 
+        - N: {cultivo_info['npk_optimo']['N'][0]}-{cultivo_info['npk_optimo']['N'][1]} ppm
+        - P: {cultivo_info['npk_optimo']['P'][0]}-{cultivo_info['npk_optimo']['P'][1]} ppm  
+        - K: {cultivo_info['npk_optimo']['K'][0]}-{cultivo_info['npk_optimo']['K'][1]} ppm
+        **pH Óptimo:** {cultivo_info['ph_optimo'][0]}-{cultivo_info['ph_optimo'][1]}
         """)
         
         # Carga de archivos
@@ -315,15 +443,15 @@ def main():
         analizar_disabled = st.session_state.geojson_data is None
         
         if st.button(
-            "🚀 Ejecutar Análisis", 
+            "🚀 Ejecutar Análisis de Fertilidad", 
             type="primary", 
             use_container_width=True,
             disabled=analizar_disabled
         ):
             if st.session_state.geojson_data:
-                with st.spinner("Analizando cultivo..."):
-                    analizador = AnalizadorCultivos()
-                    st.session_state.resultados = analizador.analizar_cultivo(
+                with st.spinner("Analizando fertilidad del suelo..."):
+                    analizador = AnalizadorFertilidad()
+                    st.session_state.resultados = analizador.analizar_fertilidad(
                         st.session_state.geojson_data, cultivo, fecha_inicio, fecha_fin
                     )
             else:
@@ -344,40 +472,69 @@ def main():
                 feature = st.session_state.geojson_data['features'][0]
                 propiedades = feature.get('properties', {})
                 nombre = propiedades.get('name', 'Sin nombre')
-                st.info(f"**Polígono cargado:** {nombre}")
+                area_ha = propiedades.get('area_ha', 'N/A')
+                st.info(f"**Polígono:** {nombre} | **Área:** {area_ha} ha")
         else:
             st.info("👆 Carga un archivo ZIP o KML para visualizar el mapa")
     
     with col2:
-        st.markdown('<h3 class="section-header">📊 Resultados</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 class="section-header">📊 Resultados de Fertilidad</h3>', unsafe_allow_html=True)
         
         if st.session_state.resultados:
             resultados = st.session_state.resultados
             
             # Métricas principales
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.metric("Salud General", f"{resultados['salud_general']}%")
-            with col_b:
-                st.metric("NDVI Medio", f"{resultados['ndvi_media']}")
+            st.metric("Fertilidad General", f"{resultados['fertilidad_general']}%")
             
-            st.metric("Biomasa Estimada", f"{resultados['biomasa_estimada']} kg/ha")
-            
-            # Recomendación
+            # Niveles de nutrientes
             st.markdown("---")
-            st.markdown("### 💡 Recomendación")
-            st.info(resultados['recomendacion'])
+            st.markdown("### 🌿 Niveles de Nutrientes")
+            
+            nutrientes = resultados['nutrientes']
+            col_n, col_p, col_k = st.columns(3)
+            
+            with col_n:
+                st.metric("Nitrógeno (N)", f"{nutrientes['nitrogeno']} ppm", 
+                         delta=f"{resultados['indices']['N']}%")
+            with col_p:
+                st.metric("Fósforo (P)", f"{nutrientes['fosforo']} ppm", 
+                         delta=f"{resultados['indices']['P']}%")
+            with col_k:
+                st.metric("Potasio (K)", f"{nutrientes['potasio']} ppm", 
+                         delta=f"{resultados['indices']['K']}%")
+            
+            # Parámetros adicionales
+            col_ph, col_mo = st.columns(2)
+            with col_ph:
+                st.metric("pH", f"{nutrientes['ph']}", 
+                         delta=f"{resultados['indices']['pH']}%")
+            with col_mo:
+                st.metric("Materia Orgánica", f"{nutrientes['materia_organica']}%")
+            
+            # Recomendaciones NPK
+            st.markdown("---")
+            st.markdown("### 💡 Recomendaciones de Fertilización")
+            
+            for recomendacion in resultados['recomendaciones_npk']:
+                if "óptimo" in recomendacion.lower():
+                    st.success(recomendacion)
+                elif "adecuado" in recomendacion.lower():
+                    st.info(recomendacion)
+                elif "aplicar" in recomendacion.lower():
+                    st.warning(recomendacion)
+                else:
+                    st.error(recomendacion)
             
             # Información adicional
             st.markdown("---")
-            st.markdown("### 📋 Información")
-            st.write(f"**Cultivo:** {CULTIVOS[cultivo]['nombre']}")
+            st.markdown("### 📋 Información del Análisis")
+            st.write(f"**Cultivo:** {resultados['cultivo']}")
             st.write(f"**Fecha análisis:** {resultados['fecha_analisis']}")
             st.write(f"**Período:** {fecha_inicio} a {fecha_fin}")
             
         else:
             if st.session_state.geojson_data:
-                st.info("👆 Ejecuta el análisis para ver los resultados")
+                st.info("👆 Ejecuta el análisis para ver los resultados de fertilidad")
             else:
                 st.info("💡 Carga un archivo y ejecuta el análisis para ver los resultados aquí")
 
