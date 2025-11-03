@@ -1,54 +1,25 @@
 import streamlit as st
-from streamlit_folium import st_folium  # <-- NUEVA FORMA
+from streamlit_folium import st_folium
 import geopandas as gpd
 import folium
 import tempfile
 import os
 import pandas as pd
 import numpy as np
+import hashlib
 
 # --- Configuración ---
-st.set_page_config(
-    page_title="Fertilidad + ESRI Map",
-    page_icon="🌾",
-    layout="wide"
-)
+st.set_page_config(page_title="Fertilidad + ESRI", layout="wide")
 
-# Cache para evitar re-render del mapa
-@st.cache_data(show_spinner=False)
-def load_shapefile(uploaded_files):
-    if not uploaded_files:
-        return None
-
-    shp_file = None
-    for f in uploaded_files:
-        if f.name.lower().endswith('.shp'):
-            shp_file = f
-            break
-    if not shp_file:
-        return None
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        file_paths = {}
-        for f in uploaded_files:
-            path = os.path.join(tmpdir, f.name)
-            with open(path, "wb") as buffer:
-                buffer.write(f.getbuffer())
-            file_paths[f.name.lower()] = path
-
-        shp_path = file_paths[shp_file.name.lower()]
-        try:
-            gdf = gpd.read_file(shp_path)
-            if gdf.empty:
-                return None
-            return gdf
-        except Exception as e:
-            st.error(f"Error leyendo SHP: {e}")
-            return None
+# Inicializar session_state
+if "map_key" not in st.session_state:
+    st.session_state.map_key = 0
+if "last_file_hash" not in st.session_state:
+    st.session_state.last_file_hash = None
 
 # --- Título ---
-st.title("🌾 Analizador de Fertilidad + Mapa ESRI")
-st.markdown("Carga un **SHP** → Análisis de N, P, K → Mapa interactivo con **ESRI World Street Map**")
+st.title("Analizador de Fertilidad + Mapa ESRI")
+st.markdown("Sube un **SHP** → análisis → mapa interactivo **sin errores**.")
 
 # --- Sidebar ---
 cultivo = st.sidebar.selectbox("Cultivo:", ["Trigo", "Maíz", "Soja", "Sorgo", "Girasol"])
@@ -58,22 +29,53 @@ uploaded_files = st.file_uploader(
     "Sube archivos SHP (.shp, .shx, .dbf, .prj...)",
     type=['shp', 'shx', 'dbf', 'prj', 'cpg', 'qpj'],
     accept_multiple_files=True,
-    key="shp_uploader"
+    key="uploader"
 )
 
+# --- Función para generar hash único del conjunto de archivos ---
+def get_files_hash(uploaded_files):
+    if not uploaded_files:
+        return None
+    hash_str = ""
+    for f in sorted(uploaded_files, key=lambda x: x.name):
+        hash_str += f.name + str(f.size)
+    return hashlib.md5(hash_str.encode()).hexdigest()
+
 # --- Procesar SHP ---
-gdf = load_shapefile(uploaded_files)
+gdf = None
+if uploaded_files:
+    current_hash = get_files_hash(uploaded_files)
 
-if gdf is not None:
-    st.success(f"Polígono cargado: {len(gdf)} feature(s)")
+    # Solo recargar si cambió el archivo
+    if current_hash != st.session_state.last_file_hash:
+        st.session_state.last_file_hash = current_hash
+        st.session_state.map_key += 1  # Forzar nuevo key
 
-    # Área en hectáreas
+    # Cargar SHP
+    shp_file = next((f for f in uploaded_files if f.name.lower().endswith('.shp')), None)
+    if not shp_file:
+        st.error("Falta el archivo `.shp`")
+        st.stop()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for f in uploaded_files:
+            with open(os.path.join(tmpdir, f.name), "wb") as buffer:
+                buffer.write(f.getbuffer())
+
+        try:
+            gdf = gpd.read_file(os.path.join(tmpdir, shp_file.name))
+            if gdf.empty:
+                st.error("SHP vacío")
+                st.stop()
+        except Exception as e:
+            st.error(f"Error leyendo SHP: {e}")
+            st.stop()
+
+    st.success(f"Polígono: {len(gdf)} feature(s)")
     area_ha = gdf.to_crs(epsg=3857).geometry.area.sum() / 10000
-    col1, col2 = st.columns(2)
-    col1.metric("Polígonos", len(gdf))
-    col2.metric("Área", f"{area_ha:,.2f} ha")
+    st.metric("Área total", f"{area_ha:,.2f} ha")
 
-    # --- Análisis simulado (REEMPLAZA CON GEE) ---
+    # --- Análisis simulado ---
     st.header("Análisis de Suelo")
     np.random.seed(42)
     N, P, K = np.random.uniform(20, 80), np.random.uniform(10, 60), np.random.uniform(30, 90)
@@ -92,58 +94,62 @@ if gdf is not None:
     cols[1].metric("P", f"{P:.1f} ppm", f"+{rec_P:.0f} kg/ha")
     cols[2].metric("K", f"{K:.1f} ppm", f"+{rec_K:.0f} kg/ha")
 
-    # --- MAPA CON st_folium (SIN ERRORES) ---
+    # --- MAPA con st_folium + key único ---
     st.header("Mapa ESRI")
 
-    centroid = gdf.geometry.union_all().centroid
-    center = [centroid.y, centroid.x]
+    # Contenedor vacío para el mapa
+    map_container = st.empty()
 
-    m = folium.Map(location=center, zoom_start=14, tiles=None)
+    with map_container:
+        centroid = gdf.geometry.union_all().centroid
+        center = [centroid.y, centroid.x]
 
-    # Capas ESRI
-    folium.TileLayer(
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri',
-        name='ESRI Streets',
-        overlay=False
-    ).add_to(m)
+        m = folium.Map(location=center, zoom_start=14, tiles=None)
 
-    folium.TileLayer(
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri',
-        name='ESRI Satélite',
-        overlay=False
-    ).add_to(m)
+        # Capas ESRI
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri',
+            name='Calles',
+            overlay=False
+        ).add_to(m)
 
-    # Polígono
-    folium.GeoJson(
-        gdf,
-        style_function=lambda x: {
-            'fillColor': '#3388ff',
-            'color': 'black',
-            'weight': 3,
-            'fillOpacity': 0.4
-        }
-    ).add_to(m)
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri',
+            name='Satélite',
+            overlay=False
+        ).add_to(m)
 
-    # Marcador
-    folium.CircleMarker(
-        location=center,
-        radius=10,
-        color='red',
-        fill=True,
-        popup=f"<b>{cultivo}</b><br>N: {N:.1f}<br>P: {P:.1f}<br>K: {K:.1f}"
-    ).add_to(m)
+        # Polígono
+        folium.GeoJson(
+            gdf,
+            style_function=lambda x: {
+                'fillColor': '#3388ff',
+                'color': 'black',
+                'weight': 3,
+                'fillOpacity': 0.4
+            }
+        ).add_to(m)
 
-    folium.LayerControl().add_to(m)
+        # Marcador
+        folium.CircleMarker(
+            location=center,
+            radius=10,
+            color='red',
+            fill=True,
+            popup=f"<b>{cultivo}</b><br>N: {N:.1f}<br>P: {P:.1f}<br>K: {K:.1f}"
+        ).add_to(m)
 
-    # --- MOSTRAR MAPA CON st_folium ---
-    map_data = st_folium(m, width=800, height=500, key="mapa_esri")
+        folium.LayerControl().add_to(m)
+
+        # Key único para evitar DOM conflicts
+        st_folium(m, width=800, height=500, key=f"map_{st.session_state.map_key}")
 
 else:
-    st.info("Sube un archivo SHP para comenzar.")
-    st.markdown("**Tip:** Usa QGIS para exportar tu lote como SHP.")
+    st.info("Sube un SHP para comenzar.")
+    st.markdown("**Tip:** Exporta tu lote desde QGIS como Shapefile.")
 
 # --- Footer ---
 st.markdown("---")
-st.caption("Streamlit + Folium + ESRI | Sin `streamlit-folium` → Sin errores de DOM")
+st.caption("Sin errores de DOM | st_folium + key dinámico + st.empty()")
