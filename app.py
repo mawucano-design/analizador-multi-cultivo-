@@ -1,6 +1,5 @@
 import streamlit as st
 import folium
-# ← QUITA: from streamlit_folium import st_folium
 import tempfile
 import os
 import json
@@ -14,120 +13,116 @@ st.set_page_config(page_title="Fertilidad + ESRI", layout="wide")
 # Session state
 if "map_key" not in st.session_state:
     st.session_state.map_key = 0
-if "last_input_hash" not in st.session_state:
-    st.session_state.last_input_hash = None
+if "last_hash" not in st.session_state:
+    st.session_state.last_hash = None
 
 # --- Título ---
 st.title("Analizador de Fertilidad + Mapa ESRI")
-st.markdown("Sube **SHP** o pega **GeoJSON** → análisis → mapa **sin errores**.")
+st.markdown("Sube SHP o pega GeoJSON → análisis → mapa interactivo.")
 
 # --- Sidebar ---
 cultivo = st.sidebar.selectbox("Cultivo:", ["Trigo", "Maíz", "Soja", "Sorgo", "Girasol"])
 
 # --- Carga SHP ---
-st.header("Opción 1: Carga SHP")
+st.header("Carga SHP")
 try:
     import fiona
-    SHP_SUPPORTED = True
-except ImportError:
-    SHP_SUPPORTED = False
+    SHP_OK = True
+except:
+    SHP_OK = False
     st.warning("Fiona no disponible. Usa GeoJSON.")
 
 uploaded_files = None
-if SHP_SUPPORTED:
+if SHP_OK:
     uploaded_files = st.file_uploader(
-        "Sube archivos SHP",
-        type=['shp', 'shx', 'dbf', 'prj', 'cpg', 'qpj'],
+        "Archivos SHP",
+        type=['shp', 'shx', 'dbf', 'prj'],
         accept_multiple_files=True
     )
 
 # --- GeoJSON ---
-st.header("Opción 2: Pega GeoJSON")
-geojson_text = st.text_area(
-    "Pega tu GeoJSON aquí",
-    placeholder='{"type": "FeatureCollection", "features": [...] }',
-    height=150
-)
+st.header("O pega GeoJSON")
+geojson_text = st.text_area("GeoJSON:", height=120)
 
-# --- Procesar input ---
-gdf_like = None
-current_hash = None
+# --- Procesar ---
+geoms = None
+current_hash = hash(str(uploaded_files) + geojson_text)
 
-def get_input_hash():
-    if uploaded_files:
-        return hash(tuple(sorted([f.name + str(f.size) for f in uploaded_files])))
-    if geojson_text:
-        return hash(geojson_text)
-    return None
-
-current_hash = get_input_hash()
-if current_hash != st.session_state.last_input_hash:
-    st.session_state.last_input_hash = current_hash
+if current_hash != st.session_state.last_hash:
+    st.session_state.last_hash = current_hash
     st.session_state.map_key += 1
 
 # SHP
-if SHP_SUPPORTED and uploaded_files:
-    shp_file = next((f for f in uploaded_files if f.name.lower().endswith('.shp')), None)
-    if shp_file:
-        with tempfile.TemporaryDirectory() as tmpdir:
+if SHP_OK and uploaded_files:
+    shp = next((f for f in uploaded_files if f.name.endswith('.shp')), None)
+    if shp:
+        with tempfile.TemporaryDirectory() as tmp:
             for f in uploaded_files:
-                with open(os.path.join(tmpdir, f.name), "wb") as buffer:
-                    buffer.write(f.getbuffer())
+                with open(os.path.join(tmp, f.name), "wb") as out:
+                    out.write(f.getbuffer())
             try:
-                with fiona.open(os.path.join(tmpdir, shp_file.name)) as src:
-                    features = [shape(f['geometry']) for f in src]
-                    gdf_like = features
-                    st.success(f"SHP: {len(features)} polígonos")
+                import fiona
+                with fiona.open(os.path.join(tmp, shp.name)) as src:
+                    geoms = [shape(f['geometry']) for f in src]
+                st.success(f"SHP: {len(geoms)} polígonos")
             except Exception as e:
-                st.error(f"Error SHP: {e}")
+                st.error(f"SHP error: {e}")
 
 # GeoJSON
-if not gdf_like and geojson_text:
+if not geoms and geojson_text.strip():
     try:
         data = json.loads(geojson_text)
-        if data['type'] == 'FeatureCollection':
-            gdf_like = [shape(f['geometry']) for f in data['features']]
-            st.success(f"GeoJSON: {len(gdf_like)} polígonos")
+        features = data.get('features', [])
+        geoms = [shape(f['geometry']) for f in features if 'geometry' in f]
+        st.success(f"GeoJSON: {len(geoms)} polígonos")
     except Exception as e:
-        st.error(f"Error GeoJSON: {e}")
+        st.error(f"GeoJSON error: {e}")
 
 # --- Análisis y mapa ---
-if gdf_like:
+if geoms and len(geoms) > 0:
     # Área
-    area = sum(g.area for g in gdf_like)
-    st.metric("Área aprox.", f"{area:.4f} unidades")
+    area = sum(g.area for g in geoms)
+    st.metric("Área", f"{area:.6f} unidades²")
 
-    # Análisis
-    st.header("Análisis")
+    # Análisis simulado
     np.random.seed(42)
     N, P, K = np.random.uniform(20, 80), np.random.uniform(10, 60), np.random.uniform(30, 90)
-    rec = {"Trigo": (100-N, 50-P, 70-K)}  # simplificado
-    rec_N, rec_P, rec_K = max(0, rec["Trigo"][0]), max(0, rec["Trigo"][1]), max(0, rec["Trigo"][2])
+    rec_N = max(0, 100 - N) if cultivo == "Trigo" else max(0, 180 - N)
+    rec_P = max(0, 50 - P) if cultivo in ["Trigo", "Soja"] else max(0, 80 - P)
+    rec_K = max(0, 70 - K)
 
     cols = st.columns(3)
-    cols[0].metric("N", f"{N:.1f}", f"+{rec_N:.0f} kg")
-    cols[1].metric("P", f"{P:.1f}", f"+{rec_P:.0f} kg")
-    cols[2].metric("K", f"{K:.1f}", f"+{rec_K:.0f} kg")
+    cols[0].metric("N", f"{N:.1f} ppm", f"+{rec_N:.0f} kg/ha")
+    cols[1].metric("P", f"{P:.1f} ppm", f"+{rec_P:.0f} kg/ha")
+    cols[2].metric("K", f"{K:.1f} ppm", f"+{rec_K:.0f} kg/ha")
 
     # Mapa
     st.header("Mapa ESRI")
-    center = gdf_like[0].centroid
-    m = folium.Map(location=[center.y, center.x], zoom_start=14, tiles=None)
+    center = geoms[0].centroid
+    m = folium.Map(location=[center.y, center.x], zoom_start=15, tiles=None)
 
+    # Capas ESRI
     folium.TileLayer(
         tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri', name='Calles'
+        attr='Esri', name='Calles', overlay=False
     ).add_to(m)
 
-    for geom in gdf_like:
-        folium.GeoJson(geom.__geo_interface__, style_function=lambda x: {
-            'fillColor': 'blue', 'color': 'black', 'weight': 2, 'fillOpacity': 0.3
-        }).add_to(m)
+    # Polígonos
+    for g in geoms:
+        folium.GeoJson(
+            g.__geo_interface__,
+            style_function=lambda x: {'fillColor': 'blue', 'color': 'black', 'weight': 2, 'fillOpacity': 0.4}
+        ).add_to(m)
 
     folium.LayerControl().add_to(m)
 
-    # Usa st_folium directamente (nativo)
+    # Usa st_folium directamente (SIN import)
     st_folium(m, width=800, height=500, key=f"map_{st.session_state.map_key}")
 
 else:
-    st.info("Sube SHP o pega GeoJSON.")
+    st.info("Sube SHP o pega GeoJSON para empezar.")
+    st.code('''{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[-58.4,-34.6],[-58.3,-34.6],[-58.3,-34.5],[-58.4,-34.5],[-58.4,-34.6]]]]}}]}''', language="json")
+
+# --- Footer ---
+st.markdown("---")
+st.caption("Streamlit 1.38.0 + folium → st_folium nativo")
