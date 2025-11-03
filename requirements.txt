@@ -1,5 +1,7 @@
+# requirements.txt
 streamlit==1.38.0
-folium>=0.17.0
+folium==0.17.0
+streamlit-folium==0.17.0
 pandas>=2.2.0
 numpy>=1.26.0
 fiona>=1.9.0
