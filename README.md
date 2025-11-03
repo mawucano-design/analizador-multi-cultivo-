@@ -1,28 +1,26 @@
-# 🧪 Analizador de Fertilidad con Mapa ESRI
+# 🌱 Analizador Multi-Cultivo con Sentinel-2
 
-Visualización de polígonos SHP reales para análisis de nutrientes (N, P, K) en 5 cultivos: Trigo, Maíz, Soja, Sorgo, Girasol. Incluye recomendaciones de fertilización y mapas interactivos con base ESRI.
+Sistema de análisis de cultivos utilizando imágenes satelitales Sentinel-2 y Sentinel Hub.
 
-## ✨ Funcionalidades
-- Carga de archivos SHP para definir el área de análisis.
-- Análisis de nutrientes usando metodología GEE (integra tu código original).
-- Recomendaciones específicas por cultivo.
-- **Nuevo:** Visualización del polígono y resultados en mapa base ESRI (World Street Map) con Folium.
+## 🚀 Características
 
-## 🚀 Cómo usar
-1. Despliega en [Streamlit Cloud](https://share.streamlit.io/) conectando este repo.
-2. Sube archivos SHP (.shp, .shx, .dbf).
-3. Selecciona el cultivo en la sidebar.
-4. Ve los resultados y el mapa interactivo.
+- **Análisis multi-cultivo** (Trigo, Maíz, Soja, Sorgo, Girasol)
+- **Imágenes Sentinel-2** en tiempo casi real
+- **Índices de vegetación** (NDVI, NDWI)
+- **Mapas interactivos** con capas base ESRI
+- **Evaluación de salud** de cultivos
+- **Recomendaciones automáticas** basadas en análisis
 
-## 📦 Requisitos
-Ver `requirements.txt`. Instala con `pip install -r requirements.txt`.
+## 📋 Prerrequisitos
 
-## 🔧 Desarrollo
-- Basado en [repo original](https://github.com/mawucano-design/Analizador-de-Fertilidad.-Trigo---Ma-z---Soja---Sorgo---Girasol).
-- Para GEE: Configura autenticación en Google Earth Engine.
-- Mapa ESRI: Usa tiles gratuitos de ArcGIS Online (ver términos de uso).
+### Credenciales Sentinel Hub
+1. Regístrate en [Sentinel Hub](https://www.sentinel-hub.com/)
+2. Crea una nueva instancia en [Dashboard](https://apps.sentinel-hub.com/dashboard/)
+3. Obtén tu `Client ID` y `Client Secret`
 
-## 📝 Licencia
-MIT License.
+### Configuración de credenciales
 
-¡Contribuciones bienvenidas! 🌾
+**Opción 1: Variables de entorno**
+```bash
+export SENTINELHUB_CLIENT_ID="tu_client_id"
+export SENTINELHUB_CLIENT_SECRET="tu_client_secret"
