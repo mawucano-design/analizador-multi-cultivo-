@@ -1,8 +1,4 @@
-
-### 5. `.gitignore` actualizado
-
-```gitignore
-# Datos temporales
+# Streamlit
 __pycache__/
 *.pyc
 *.pyo
@@ -10,33 +6,28 @@ __pycache__/
 .Python
 *.so
 
-# Entornos virtuales
+# Virtual environments
 .env
 .venv
 env/
 venv/
 ENV/
 
-# Archivos de sistema
+# System files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Archivos de IDE
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Datos de usuario
+# Data
 data/usuario/
 resultados/
-!.gitkeep
-
-# Credenciales
-config.json
-*.key
-*.pem
+*.geojson
 
 # Logs
 *.log
