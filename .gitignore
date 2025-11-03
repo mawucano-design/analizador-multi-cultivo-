@@ -1,28 +1,46 @@
-# Entorno virtual
-venv/
-env/
-.env
 
-# Archivos temporales de Python
+### 5. `.gitignore` actualizado
+
+```gitignore
+# Datos temporales
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
 *.so
 
-# Archivos de Streamlit
-.streamlit/
+# Entornos virtuales
+.env
+.venv
+env/
+venv/
+ENV/
 
-# Archivos SHP de prueba (no commitear datos sensibles)
-*.shp
-*.shx
-*.dbf
-*.prj
-*.cpg
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# Logs y caches
-*.log
-.cache/
-
-# IDE
+# Archivos de IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# Datos de usuario
+data/usuario/
+resultados/
+!.gitkeep
+
+# Credenciales
+config.json
+*.key
+*.pem
+
+# Logs
+*.log
+logs/
+
+# Sentinel Hub cache
+.sentinelhub/
