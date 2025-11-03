@@ -11,6 +11,8 @@ import io
 import os
 import pandas as pd
 import random
+from shapely.geometry import Polygon, MultiPolygon
+from shapely.ops import unary_union
 
 # Configuración de página
 st.set_page_config(
@@ -48,14 +50,20 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
-    .nutriente-card {
-        padding: 0.5rem;
-        margin: 0.5rem 0;
-        border-radius: 5px;
-        border-left: 4px solid;
-    }
     .tabla-resultados {
         font-size: 0.9rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #f0f2f6;
+        border-radius: 5px 5px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -64,35 +72,30 @@ st.markdown("""
 CULTIVOS = {
     "trigo": {
         "nombre": "Trigo",
-        "ndvi_optimo": (0.6, 0.8),
         "color": "#FFD700",
         "npk_optimo": {"N": (80, 120), "P": (40, 60), "K": (50, 80)},
         "ph_optimo": (6.0, 7.0)
     },
     "maiz": {
         "nombre": "Maíz", 
-        "ndvi_optimo": (0.7, 0.9),
         "color": "#32CD32",
         "npk_optimo": {"N": (120, 180), "P": (50, 80), "K": (80, 120)},
         "ph_optimo": (5.8, 7.0)
     },
     "soja": {
         "nombre": "Soja",
-        "ndvi_optimo": (0.6, 0.85),
         "color": "#90EE90",
         "npk_optimo": {"N": (0, 20), "P": (40, 70), "K": (60, 100)},
         "ph_optimo": (6.0, 7.0)
     },
     "sorgo": {
         "nombre": "Sorgo",
-        "ndvi_optimo": (0.5, 0.75),
         "color": "#DAA520",
         "npk_optimo": {"N": (80, 120), "P": (30, 50), "K": (60, 90)},
         "ph_optimo": (5.5, 7.5)
     },
     "girasol": {
         "nombre": "Girasol",
-        "ndvi_optimo": (0.4, 0.7),
         "color": "#FF8C00",
         "npk_optimo": {"N": (60, 100), "P": (30, 50), "K": (80, 120)},
         "ph_optimo": (6.0, 7.5)
@@ -103,96 +106,73 @@ class AnalizadorFertilidad:
     def __init__(self):
         self.config = None
     
-    def dividir_en_sublotes(self, geojson_data, num_sublotes=4):
-        """Divide el polígono principal en sublotes para análisis detallado"""
+    def dividir_en_sublotes_cuadricula(self, geojson_data, filas=2, columnas=2):
+        """Divide el polígono en una cuadrícula de sublotes como el diagnóstico forrajero"""
         try:
             gdf = gpd.GeoDataFrame.from_features(geojson_data["features"])
             
-            # Si solo hay un polígono, lo dividimos en sublotes
-            if len(gdf) == 1:
-                bounds = gdf.total_bounds
-                minx, miny, maxx, maxy = bounds
-                
-                sublotes = []
-                if num_sublotes == 4:
-                    # Dividir en 4 cuadrantes
-                    midx = (minx + maxx) / 2
-                    midy = (miny + maxy) / 2
+            # Unir todos los polígonos en uno solo
+            poligono_principal = unary_union(gdf.geometry)
+            
+            # Obtener los bounds del polígono
+            minx, miny, maxx, maxy = poligono_principal.bounds
+            
+            # Calcular el tamaño de cada celda
+            ancho_celda = (maxx - minx) / columnas
+            alto_celda = (maxy - miny) / filas
+            
+            sublotes = []
+            contador = 1
+            
+            # Crear la cuadrícula
+            for i in range(filas):
+                for j in range(columnas):
+                    # Coordenadas de la celda
+                    celda_minx = minx + (j * ancho_celda)
+                    celda_maxx = minx + ((j + 1) * ancho_celda)
+                    celda_miny = miny + (i * alto_celda)
+                    celda_maxy = miny + ((i + 1) * alto_celda)
                     
-                    sublotes_coords = [
-                        [[minx, miny], [midx, miny], [midx, midy], [minx, midy], [minx, miny]],
-                        [[midx, miny], [maxx, miny], [maxx, midy], [midx, midy], [midx, miny]],
-                        [[minx, midy], [midx, midy], [midx, maxy], [minx, maxy], [minx, midy]],
-                        [[midx, midy], [maxx, midy], [maxx, maxy], [midx, maxy], [midx, midy]]
-                    ]
-                else:
-                    # División simple en filas y columnas
-                    for i in range(num_sublotes):
-                        sublotes_coords = self._dividir_poligono_aleatorio(bounds, num_sublotes)
-                
-                # Crear GeoDataFrame con sublotes
-                features = []
-                for i, coords in enumerate(sublotes_coords):
-                    feature = {
-                        "type": "Feature",
-                        "properties": {
-                            "sublote_id": i + 1,
-                            "nombre": f"Sublote {i + 1}",
-                            "area_ha": random.uniform(5, 25)  # Área estimada
-                        },
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [coords]
+                    # Crear polígono de la celda
+                    celda_poligono = Polygon([
+                        [celda_minx, celda_miny],
+                        [celda_maxx, celda_miny],
+                        [celda_maxx, celda_maxy],
+                        [celda_minx, celda_maxy],
+                        [celda_minx, celda_miny]
+                    ])
+                    
+                    # Intersectar con el polígono principal
+                    interseccion = poligono_principal.intersection(celda_poligono)
+                    
+                    if not interseccion.is_empty:
+                        # Calcular área en hectáreas
+                        area_ha = interseccion.area * 10000  # Convertir de grados² a ha (aproximado)
+                        
+                        feature = {
+                            "type": "Feature",
+                            "properties": {
+                                "sublote_id": contador,
+                                "nombre": f"Sublote {contador}",
+                                "area_ha": round(area_ha, 2),
+                                "fila": i + 1,
+                                "columna": j + 1
+                            },
+                            "geometry": json.loads(gpd.GeoSeries([interseccion]).to_json())['features'][0]['geometry']
                         }
-                    }
-                    features.append(feature)
-                
-                geojson_sublotes = {
-                    "type": "FeatureCollection",
-                    "features": features
-                }
-                
-                return geojson_sublotes
-            else:
-                # Si ya hay múltiples features, usarlos como sublotes
-                for i, feature in enumerate(geojson_data["features"]):
-                    if "properties" not in feature:
-                        feature["properties"] = {}
-                    feature["properties"]["sublote_id"] = i + 1
-                    feature["properties"]["nombre"] = f"Sublote {i + 1}"
-                    if "area_ha" not in feature["properties"]:
-                        feature["properties"]["area_ha"] = random.uniform(5, 25)
-                
-                return geojson_data
-                
+                        sublotes.append(feature)
+                        contador += 1
+            
+            geojson_sublotes = {
+                "type": "FeatureCollection",
+                "features": sublotes
+            }
+            
+            return geojson_sublotes
+            
         except Exception as e:
             st.error(f"Error dividiendo en sublotes: {str(e)}")
             return geojson_data
-    
-    def _dividir_poligono_aleatorio(self, bounds, num_sublotes):
-        """Divide un polígono en sublotes de forma aleatoria"""
-        minx, miny, maxx, maxy = bounds
-        width = maxx - minx
-        height = maxy - miny
-        
-        sublotes = []
-        for i in range(num_sublotes):
-            # Crear sublotes con variación aleatoria
-            sub_minx = minx + (i * width / num_sublotes) + random.uniform(0, width * 0.1)
-            sub_maxx = minx + ((i + 1) * width / num_sublotes) - random.uniform(0, width * 0.1)
-            sub_miny = miny + random.uniform(0, height * 0.2)
-            sub_maxy = maxy - random.uniform(0, height * 0.2)
-            
-            coords = [
-                [sub_minx, sub_miny],
-                [sub_maxx, sub_miny],
-                [sub_maxx, sub_maxy],
-                [sub_minx, sub_maxy],
-                [sub_minx, sub_miny]
-            ]
-            sublotes.append(coords)
-        
-        return sublotes
     
     def analizar_fertilidad_sublotes(self, geojson_sublotes, cultivo, fecha_inicio, fecha_fin):
         """Analiza la fertilidad para cada sublote individualmente"""
@@ -207,12 +187,17 @@ class AnalizadorFertilidad:
                 nombre_sublote = feature["properties"]["nombre"]
                 area_ha = feature["properties"].get("area_ha", 10)
                 
-                # Generar datos de fertilidad únicos para cada sublote
-                nitrogeno = random.uniform(20, 150)
-                fosforo = random.uniform(10, 80)
-                potasio = random.uniform(30, 120)
-                ph = random.uniform(5.0, 8.0)
-                materia_organica = random.uniform(1.5, 4.5)
+                # Generar datos de fertilidad realistas con variación entre sublotes
+                base_n = random.uniform(50, 100)
+                base_p = random.uniform(30, 60)
+                base_k = random.uniform(40, 80)
+                
+                # Añadir variación específica por sublote
+                nitrogeno = max(10, min(200, base_n + random.uniform(-20, 20)))
+                fosforo = max(5, min(100, base_p + random.uniform(-15, 15)))
+                potasio = max(20, min(150, base_k + random.uniform(-20, 20)))
+                ph = random.uniform(5.5, 7.5)
+                materia_organica = random.uniform(2.0, 4.0)
                 
                 # Calcular índices de fertilidad
                 indice_n = self._calcular_indice_nutriente(nitrogeno, cultivo_info['npk_optimo']['N'])
@@ -228,15 +213,17 @@ class AnalizadorFertilidad:
                     nitrogeno, fosforo, potasio, ph, cultivo_info
                 )
                 
-                # Determinar color para el mapa
-                color_fertilidad = self._obtener_color_fertilidad(fertilidad_general)
-                color_recomendacion = self._obtener_color_recomendacion(recomendaciones[0])  # Usar primera recomendación
+                # Determinar categoría de fertilidad para el mapa
+                categoria_fertilidad = self._obtener_categoria_fertilidad(fertilidad_general)
+                categoria_recomendacion = self._obtener_categoria_recomendacion(recomendaciones)
                 
                 resultado_sublote = {
                     'sublote_id': sublote_id,
                     'nombre_sublote': nombre_sublote,
                     'area_ha': round(area_ha, 2),
                     'fertilidad_general': round(fertilidad_general, 1),
+                    'categoria_fertilidad': categoria_fertilidad,
+                    'categoria_recomendacion': categoria_recomendacion,
                     'nutrientes': {
                         'nitrogeno': round(nitrogeno, 1),
                         'fosforo': round(fosforo, 1),
@@ -251,13 +238,10 @@ class AnalizadorFertilidad:
                         'pH': round(indice_ph, 1)
                     },
                     'recomendaciones_npk': recomendaciones,
-                    'color_fertilidad': color_fertilidad,
-                    'color_recomendacion': color_recomendacion,
                     'dosis_npk': self._calcular_dosis_npk(nitrogeno, fosforo, potasio, cultivo_info)
                 }
                 
                 resultados_sublotes.append(resultado_sublote)
-                st.info(f"✅ Sublote {sublote_id} analizado - Fertilidad: {fertilidad_general:.1f}%")
             
             st.success(f"🎉 Análisis completado para {len(resultados_sublotes)} sublotes")
             
@@ -304,42 +288,42 @@ class AnalizadorFertilidad:
         if nitrogeno < optimo_n[0]:
             deficit = optimo_n[0] - nitrogeno
             dosis = deficit * 2.0
-            recomendaciones.append(f"Aplicar {dosis:.0f} kg/ha de Urea")
+            recomendaciones.append(f"Nitrogeno: Aplicar {dosis:.0f} kg/ha de Urea")
         elif nitrogeno > optimo_n[1]:
-            recomendaciones.append("Nivel adecuado, no fertilizar")
+            recomendaciones.append("Nitrogeno: Nivel adecuado")
         else:
-            recomendaciones.append("Nivel óptimo")
+            recomendaciones.append("Nitrogeno: Nivel óptimo")
         
         # Recomendaciones para Fósforo
         optimo_p = cultivo_info['npk_optimo']['P']
         if fosforo < optimo_p[0]:
             deficit = optimo_p[0] - fosforo
             dosis = deficit * 2.3
-            recomendaciones.append(f"Aplicar {dosis:.0f} kg/ha de Superfosfato")
+            recomendaciones.append(f"Fósforo: Aplicar {dosis:.0f} kg/ha de Superfosfato")
         elif fosforo > optimo_p[1]:
-            recomendaciones.append("Nivel adecuado, no fertilizar")
+            recomendaciones.append("Fósforo: Nivel adecuado")
         else:
-            recomendaciones.append("Nivel óptimo")
+            recomendaciones.append("Fósforo: Nivel óptimo")
         
         # Recomendaciones para Potasio
         optimo_k = cultivo_info['npk_optimo']['K']
         if potasio < optimo_k[0]:
             deficit = optimo_k[0] - potasio
             dosis = deficit * 1.7
-            recomendaciones.append(f"Aplicar {dosis:.0f} kg/ha de Cloruro de Potasio")
+            recomendaciones.append(f"Potasio: Aplicar {dosis:.0f} kg/ha de Cloruro de Potasio")
         elif potasio > optimo_k[1]:
-            recomendaciones.append("Nivel adecuado, no fertilizar")
+            recomendaciones.append("Potasio: Nivel adecuado")
         else:
-            recomendaciones.append("Nivel óptimo")
+            recomendaciones.append("Potasio: Nivel óptimo")
         
         # Recomendaciones para pH
         optimo_ph = cultivo_info['ph_optimo']
         if ph < optimo_ph[0]:
-            recomendaciones.append(f"Encalar con 1-2 tn/ha de calcáreo")
+            recomendaciones.append(f"pH: Encalar con 1-2 tn/ha de calcáreo")
         elif ph > optimo_ph[1]:
-            recomendaciones.append(f"Aplicar azufre para reducir pH")
+            recomendaciones.append(f"pH: Aplicar azufre para reducir pH")
         else:
-            recomendaciones.append(f"pH óptimo")
+            recomendaciones.append(f"pH: Nivel óptimo")
         
         return recomendaciones
     
@@ -359,25 +343,28 @@ class AnalizadorFertilidad:
             'K': round(dosis_k, 1)
         }
     
-    def _obtener_color_fertilidad(self, fertilidad):
-        """Determina color basado en el nivel de fertilidad"""
+    def _obtener_categoria_fertilidad(self, fertilidad):
+        """Determina categoría de fertilidad"""
         if fertilidad >= 80:
-            return 'green'
+            return "Alta"
         elif fertilidad >= 60:
-            return 'yellow'
+            return "Media"
         elif fertilidad >= 40:
-            return 'orange'
+            return "Baja"
         else:
-            return 'red'
+            return "Muy Baja"
     
-    def _obtener_color_recomendacion(self, recomendacion):
-        """Determina color basado en la recomendación"""
-        if "óptimo" in recomendacion.lower() or "adecuado" in recomendacion.lower():
-            return 'blue'
-        elif "aplicar" in recomendacion.lower():
-            return 'purple'
+    def _obtener_categoria_recomendacion(self, recomendaciones):
+        """Determina categoría de recomendación basada en las necesidades"""
+        necesidades = sum(1 for rec in recomendaciones if "Aplicar" in rec)
+        if necesidades == 0:
+            return "Sin Fertilización"
+        elif necesidades == 1:
+            return "Fertilización Leve"
+        elif necesidades == 2:
+            return "Fertilización Moderada"
         else:
-            return 'gray'
+            return "Fertilización Intensiva"
 
 def procesar_archivo_subido(archivo):
     """Procesa archivos ZIP y KML"""
@@ -401,7 +388,6 @@ def procesar_archivo_zip(contenido_zip, nombre_archivo):
     try:
         with zipfile.ZipFile(io.BytesIO(contenido_zip), 'r') as zip_ref:
             archivos = zip_ref.namelist()
-            st.info(f"📁 Archivos en el ZIP: {', '.join(archivos)}")
             
             # Buscar Shapefiles (.shp)
             shp_files = [f for f in archivos if f.lower().endswith('.shp')]
@@ -473,7 +459,7 @@ def procesar_archivo_kml(contenido_kml, nombre_archivo):
         return None
 
 def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
-    """Crea mapa de fertilidad por sublotes"""
+    """Crea mapa de fertilidad por sublotes con leyenda correcta"""
     try:
         gdf = gpd.GeoDataFrame.from_features(geojson_sublotes["features"])
         centro = [gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()]
@@ -487,21 +473,32 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
             name='Satélite'
         ).add_to(m)
         
+        # Colores para categorías de fertilidad
+        colores_fertilidad = {
+            "Alta": "green",
+            "Media": "yellow", 
+            "Baja": "orange",
+            "Muy Baja": "red"
+        }
+        
         # Agregar sublotes con colores según fertilidad
         for feature in geojson_sublotes["features"]:
             sublote_id = feature["properties"]["sublote_id"]
             resultado = next((r for r in resultados_sublotes if r['sublote_id'] == sublote_id), None)
             
             if resultado:
-                color = resultado['color_fertilidad']
+                color = colores_fertilidad.get(resultado['categoria_fertilidad'], 'gray')
                 popup_text = f"""
-                <b>Sublote {sublote_id}</b><br>
-                <b>Fertilidad:</b> {resultado['fertilidad_general']}%<br>
+                <div style="font-family: Arial; font-size: 12px;">
+                <h4>Sublote {sublote_id}</h4>
+                <b>Fertilidad:</b> {resultado['fertilidad_general']}% ({resultado['categoria_fertilidad']})<br>
                 <b>Área:</b> {resultado['area_ha']} ha<br>
                 <b>N:</b> {resultado['nutrientes']['nitrogeno']} ppm<br>
                 <b>P:</b> {resultado['nutrientes']['fosforo']} ppm<br>
                 <b>K:</b> {resultado['nutrientes']['potasio']} ppm<br>
-                <b>pH:</b> {resultado['nutrientes']['ph']}
+                <b>pH:</b> {resultado['nutrientes']['ph']}<br>
+                <b>M.O.:</b> {resultado['nutrientes']['materia_organica']}%
+                </div>
                 """
                 
                 folium.GeoJson(
@@ -515,17 +512,18 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
                     popup=folium.Popup(popup_text, max_width=300)
                 ).add_to(m)
         
-        # Leyenda
+        # Leyenda corregida
         legend_html = '''
         <div style="position: fixed; 
                     bottom: 50px; left: 50px; width: 200px; height: 160px; 
-                    background-color: white; border:2px solid grey; z-index:9999;
-                    font-size:14px; padding: 10px">
-        <p><b>Leyenda Fertilidad</b></p>
-        <p><i style="background:green; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> Alta (80-100%)</p>
-        <p><i style="background:yellow; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> Media (60-79%)</p>
-        <p><i style="background:orange; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> Baja (40-59%)</p>
-        <p><i style="background:red; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> Muy Baja (<40%)</p>
+                    background-color: white; border: 2px solid grey; z-index: 9999;
+                    font-size: 12px; padding: 10px; border-radius: 5px;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.2);">
+        <h4 style="margin: 0 0 8px 0; text-align: center;">Fertilidad del Suelo</h4>
+        <p style="margin: 4px 0;"><span style="background: green; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Alta (80-100%)</p>
+        <p style="margin: 4px 0;"><span style="background: yellow; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Media (60-79%)</p>
+        <p style="margin: 4px 0;"><span style="background: orange; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Baja (40-59%)</p>
+        <p style="margin: 4px 0;"><span style="background: red; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Muy Baja (<40%)</p>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -538,7 +536,7 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
         return folium.Map(location=[-34.6037, -58.3816], zoom_start=4)
 
 def crear_mapa_recomendaciones(geojson_sublotes, resultados_sublotes):
-    """Crea mapa de recomendaciones NPK por sublotes"""
+    """Crea mapa de recomendaciones NPK con leyenda correcta"""
     try:
         gdf = gpd.GeoDataFrame.from_features(geojson_sublotes["features"])
         centro = [gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()]
@@ -551,21 +549,30 @@ def crear_mapa_recomendaciones(geojson_sublotes, resultados_sublotes):
             name='OpenStreetMap'
         ).add_to(m)
         
+        # Colores para categorías de recomendación
+        colores_recomendacion = {
+            "Sin Fertilización": "blue",
+            "Fertilización Leve": "green",
+            "Fertilización Moderada": "orange",
+            "Fertilización Intensiva": "red"
+        }
+        
         # Agregar sublotes con colores según recomendaciones
         for feature in geojson_sublotes["features"]:
             sublote_id = feature["properties"]["sublote_id"]
             resultado = next((r for r in resultados_sublotes if r['sublote_id'] == sublote_id), None)
             
             if resultado:
-                color = resultado['color_recomendacion']
-                recomendacion_principal = resultado['recomendaciones_npk'][0]
+                color = colores_recomendacion.get(resultado['categoria_recomendacion'], 'gray')
                 popup_text = f"""
-                <b>Sublote {sublote_id}</b><br>
-                <b>Recomendación:</b> {recomendacion_principal}<br>
+                <div style="font-family: Arial; font-size: 12px;">
+                <h4>Sublote {sublote_id}</h4>
+                <b>Recomendación:</b> {resultado['categoria_recomendacion']}<br>
                 <b>Dosis N:</b> {resultado['dosis_npk']['N']} kg/ha<br>
                 <b>Dosis P:</b> {resultado['dosis_npk']['P']} kg/ha<br>
                 <b>Dosis K:</b> {resultado['dosis_npk']['K']} kg/ha<br>
                 <b>Fertilidad:</b> {resultado['fertilidad_general']}%
+                </div>
                 """
                 
                 folium.GeoJson(
@@ -580,16 +587,18 @@ def crear_mapa_recomendaciones(geojson_sublotes, resultados_sublotes):
                     popup=folium.Popup(popup_text, max_width=300)
                 ).add_to(m)
         
-        # Leyenda
+        # Leyenda corregida
         legend_html = '''
         <div style="position: fixed; 
-                    bottom: 50px; left: 50px; width: 220px; height: 120px; 
-                    background-color: white; border:2px solid grey; z-index:9999;
-                    font-size:14px; padding: 10px">
-        <p><b>Leyenda Recomendaciones</b></p>
-        <p><i style="background:blue; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> No fertilizar</p>
-        <p><i style="background:purple; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> Aplicar fertilizante</p>
-        <p><i style="background:gray; width:15px; height:15px; display:inline-block; margin-right:5px;"></i> Otras acciones</p>
+                    bottom: 50px; left: 50px; width: 220px; height: 140px; 
+                    background-color: white; border: 2px solid grey; z-index: 9999;
+                    font-size: 12px; padding: 10px; border-radius: 5px;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.2);">
+        <h4 style="margin: 0 0 8px 0; text-align: center;">Recomendaciones NPK</h4>
+        <p style="margin: 4px 0;"><span style="background: blue; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Sin Fertilización</p>
+        <p style="margin: 4px 0;"><span style="background: green; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Fertilización Leve</p>
+        <p style="margin: 4px 0;"><span style="background: orange; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Fertilización Moderada</p>
+        <p style="margin: 4px 0;"><span style="background: red; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span> Fertilización Intensiva</p>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -610,6 +619,7 @@ def crear_tabla_resultados(resultados_sublotes):
             'Sublote': resultado['nombre_sublote'],
             'Área (ha)': resultado['area_ha'],
             'Fertilidad (%)': resultado['fertilidad_general'],
+            'Categoría': resultado['categoria_fertilidad'],
             'N (ppm)': resultado['nutrientes']['nitrogeno'],
             'P (ppm)': resultado['nutrientes']['fosforo'],
             'K (ppm)': resultado['nutrientes']['potasio'],
@@ -617,7 +627,8 @@ def crear_tabla_resultados(resultados_sublotes):
             'M.O. (%)': resultado['nutrientes']['materia_organica'],
             'Dosis N (kg/ha)': resultado['dosis_npk']['N'],
             'Dosis P (kg/ha)': resultado['dosis_npk']['P'],
-            'Dosis K (kg/ha)': resultado['dosis_npk']['K']
+            'Dosis K (kg/ha)': resultado['dosis_npk']['K'],
+            'Recomendación': resultado['categoria_recomendacion']
         }
         datos_tabla.append(fila)
     
@@ -640,6 +651,7 @@ def exportar_geojson_resultados(geojson_sublotes, resultados_completos):
                     'fecha_analisis': resultados_completos['fecha_analisis'],
                     'periodo_analisis': f"{resultados_completos['fecha_inicio']} a {resultados_completos['fecha_fin']}",
                     'fertilidad_general': resultado['fertilidad_general'],
+                    'categoria_fertilidad': resultado['categoria_fertilidad'],
                     'nitrogeno_ppm': resultado['nutrientes']['nitrogeno'],
                     'fosforo_ppm': resultado['nutrientes']['fosforo'],
                     'potasio_ppm': resultado['nutrientes']['potasio'],
@@ -648,6 +660,7 @@ def exportar_geojson_resultados(geojson_sublotes, resultados_completos):
                     'dosis_n_kg_ha': resultado['dosis_npk']['N'],
                     'dosis_p_kg_ha': resultado['dosis_npk']['P'],
                     'dosis_k_kg_ha': resultado['dosis_npk']['K'],
+                    'categoria_recomendacion': resultado['categoria_recomendacion'],
                     'recomendacion_n': resultado['recomendaciones_npk'][0],
                     'recomendacion_p': resultado['recomendaciones_npk'][1],
                     'recomendacion_k': resultado['recomendaciones_npk'][2],
@@ -725,10 +738,16 @@ def main():
                         st.session_state.analisis_completado = False
                         st.success("✅ Archivo cargado correctamente")
         
-        # Número de sublotes
+        # Configuración de cuadrícula
         st.markdown("---")
-        st.markdown("### 🗂️ Configuración de Sublotes")
-        num_sublotes = st.slider("Número de sublotes", min_value=2, max_value=8, value=4)
+        st.markdown("### 🗂️ Configuración de Cuadrícula")
+        col1, col2 = st.columns(2)
+        with col1:
+            filas = st.slider("Filas", min_value=1, max_value=6, value=2)
+        with col2:
+            columnas = st.slider("Columnas", min_value=1, max_value=6, value=2)
+        
+        st.info(f"**Total de sublotes:** {filas * columnas}")
         
         # Fechas de análisis
         st.markdown("---")
@@ -754,10 +773,10 @@ def main():
                     try:
                         analizador = AnalizadorFertilidad()
                         
-                        # Dividir en sublotes
-                        st.info("🗂️ Dividiendo en sublotes...")
-                        geojson_sublotes = analizador.dividir_en_sublotes(
-                            st.session_state.geojson_data, num_sublotes
+                        # Dividir en sublotes en cuadrícula
+                        st.info("🗂️ Creando cuadrícula de sublotes...")
+                        geojson_sublotes = analizador.dividir_en_sublotes_cuadricula(
+                            st.session_state.geojson_data, filas, columnas
                         )
                         st.session_state.geojson_sublotes = geojson_sublotes
                         
@@ -784,7 +803,12 @@ def main():
         resultados = st.session_state.resultados
         
         # Pestañas para diferentes visualizaciones
-        tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Mapa Fertilidad", "🧪 Mapa Recomendaciones", "📊 Tabla Resultados", "📥 Exportar"])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "🗺️ Mapa Fertilidad", 
+            "🧪 Mapa Recomendaciones", 
+            "📊 Tabla Resultados", 
+            "📥 Exportar"
+        ])
         
         with tab1:
             st.markdown('<h3 class="section-header">🗺️ Mapa de Fertilidad por Sublotes</h3>', unsafe_allow_html=True)
@@ -792,7 +816,7 @@ def main():
                 st.session_state.geojson_sublotes, 
                 resultados['sublotes']
             )
-            st_folium(mapa_fertilidad, height=500, use_container_width=True)
+            st_folium(mapa_fertilidad, height=600, use_container_width=True)
             
         with tab2:
             st.markdown('<h3 class="section-header">🧪 Mapa de Recomendaciones NPK</h3>', unsafe_allow_html=True)
@@ -800,13 +824,13 @@ def main():
                 st.session_state.geojson_sublotes, 
                 resultados['sublotes']
             )
-            st_folium(mapa_recomendaciones, height=500, use_container_width=True)
+            st_folium(mapa_recomendaciones, height=600, use_container_width=True)
             
         with tab3:
             st.markdown('<h3 class="section-header">📊 Tabla de Resultados por Sublote</h3>', unsafe_allow_html=True)
             
             # Métricas generales
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 fert_promedio = np.mean([s['fertilidad_general'] for s in resultados['sublotes']])
                 st.metric("Fertilidad Promedio", f"{fert_promedio:.1f}%")
@@ -814,58 +838,59 @@ def main():
                 total_ha = sum([s['area_ha'] for s in resultados['sublotes']])
                 st.metric("Área Total", f"{total_ha:.1f} ha")
             with col3:
-                st.metric("Número de Sublotes", len(resultados['sublotes']))
+                st.metric("Sublotes", len(resultados['sublotes']))
+            with col4:
+                sublotes_bajos = sum(1 for s in resultados['sublotes'] if s['fertilidad_general'] < 60)
+                st.metric("Sublotes <60%", sublotes_bajos)
             
             # Tabla de resultados
             df_resultados = crear_tabla_resultados(resultados['sublotes'])
-            st.dataframe(df_resultados, use_container_width=True)
-            
-            # Resumen de recomendaciones
-            st.markdown("### 💡 Resumen de Recomendaciones")
-            for sublote in resultados['sublotes']:
-                with st.expander(f"Sublote {sublote['sublote_id']} - {sublote['nombre_sublote']}"):
-                    for recomendacion in sublote['recomendaciones_npk']:
-                        st.write(f"• {recomendacion}")
+            st.dataframe(df_resultados, use_container_width=True, height=400)
             
         with tab4:
             st.markdown('<h3 class="section-header">📥 Exportar Resultados</h3>', unsafe_allow_html=True)
             
-            # Exportar GeoJSON
-            geojson_export = exportar_geojson_resultados(
-                st.session_state.geojson_sublotes, 
-                resultados
-            )
+            col1, col2 = st.columns(2)
             
-            if geojson_export:
-                geojson_str = json.dumps(geojson_export, indent=2, ensure_ascii=False)
+            with col1:
+                # Exportar GeoJSON
+                geojson_export = exportar_geojson_resultados(
+                    st.session_state.geojson_sublotes, 
+                    resultados
+                )
+                
+                if geojson_export:
+                    geojson_str = json.dumps(geojson_export, indent=2, ensure_ascii=False)
+                    
+                    st.download_button(
+                        label="📥 Descargar GeoJSON con Resultados",
+                        data=geojson_str,
+                        file_name=f"fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}.geojson",
+                        mime="application/json",
+                        type="primary",
+                        use_container_width=True
+                    )
+            
+            with col2:
+                # Exportar CSV
+                df_export = crear_tabla_resultados(resultados['sublotes'])
+                csv_data = df_export.to_csv(index=False, encoding='utf-8')
                 
                 st.download_button(
-                    label="📥 Descargar GeoJSON con Resultados",
-                    data=geojson_str,
-                    file_name=f"fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}.geojson",
-                    mime="application/json",
-                    type="primary",
+                    label="📊 Descargar Tabla en CSV",
+                    data=csv_data,
+                    file_name=f"resultados_fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
                     use_container_width=True
                 )
-            
-            # Exportar CSV
-            df_export = crear_tabla_resultados(resultados['sublotes'])
-            csv_data = df_export.to_csv(index=False, encoding='utf-8')
-            
-            st.download_button(
-                label="📊 Descargar Tabla en CSV",
-                data=csv_data,
-                file_name=f"resultados_fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
             
             # Información del análisis
             st.markdown("### 📋 Información del Análisis")
             st.write(f"**Cultivo:** {resultados['cultivo']}")
             st.write(f"**Fecha de análisis:** {resultados['fecha_analisis']}")
             st.write(f"**Período analizado:** {resultados['fecha_inicio']} a {resultados['fecha_fin']}")
-            st.write(f"**Número de sublotes:** {len(resultados['sublotes'])}")
+            st.write(f"**Cuadrícula:** {filas} filas × {columnas} columnas")
+            st.write(f"**Sublotes analizados:** {len(resultados['sublotes'])}")
             st.write(f"**Área total:** {sum([s['area_ha'] for s in resultados['sublotes']]):.1f} ha")
     
     else:
@@ -891,14 +916,6 @@ def main():
                 folium.LayerControl().add_to(m)
                 
                 st_folium(m, height=500, use_container_width=True)
-                
-                # Información del polígono
-                if st.session_state.geojson_data.get('features'):
-                    feature = st.session_state.geojson_data['features'][0]
-                    propiedades = feature.get('properties', {})
-                    nombre = propiedades.get('name', 'Sin nombre')
-                    area_ha = propiedades.get('area_ha', 'N/A')
-                    st.info(f"**Polígono:** {nombre} | **Área:** {area_ha} ha")
             else:
                 st.info("👆 Carga un archivo ZIP o KML para visualizar el mapa")
         
@@ -906,18 +923,18 @@ def main():
             st.markdown('<h3 class="section-header">📊 Análisis de Fertilidad</h3>', unsafe_allow_html=True)
             
             if st.session_state.geojson_data:
-                st.info("👆 Ejecuta el análisis para ver los resultados de fertilidad por sublotes")
+                st.info("👆 Configura la cuadrícula y ejecuta el análisis para ver los resultados")
             else:
                 st.info("""
                 💡 **Para comenzar:**
                 1. Selecciona el cultivo
                 2. Carga un archivo ZIP o KML
-                3. Configura el número de sublotes
+                3. Configura la cuadrícula (filas × columnas)
                 4. Ejecuta el análisis
                 
                 **Obtendrás:**
                 • Mapas de fertilidad por sublotes
-                • Recomendaciones específicas de NPK
+                • Recomendaciones específicas de NPK  
                 • Tablas de resultados detallados
                 • Exportación en múltiples formatos
                 """)
