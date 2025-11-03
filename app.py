@@ -1,223 +1,128 @@
-"""
-Módulo para generación de mapas interactivos con ESRI
-"""
-
+import streamlit as st
+import geopandas as gpd
 import folium
-import json
+from streamlit_folium import folium_static
+import tempfile
 import os
-from folium import plugins
-from folium.features import GeoJsonTooltip
+import pandas as pd
+import numpy as np
+# Importa ee si usas GEE en el original: import ee
 
-class MapaAnalizador:
-    def __init__(self):
-        # Capas base de ESRI
-        self.esri_layers = {
-            "Imagen Satelital": "Esri.WorldImagery",
-            "Calles": "Esri.WorldStreetMap", 
-            "Topográfico": "Esri.WorldTopoMap",
-            "Oscuro": "Esri.WorldDarkGray",
-            "Terreno": "Esri.WorldTerrain"
-        }
+st.set_page_config(page_title="Analizador de Fertilidad con Mapa ESRI", layout="wide")
+
+st.title("🧪 Analizador de Fertilidad - Trigo, Maíz, Soja, Sorgo, Girasol")
+st.markdown("Carga un polígono SHP para analizar nutrientes (N, P, K) y ver resultados en mapa ESRI.")
+
+# Sidebar para selección de cultivo
+st.sidebar.header("Selecciona el cultivo")
+cultivo = st.sidebar.selectbox("Cultivo:", ["Trigo", "Maíz", "Soja", "Sorgo", "Girasol"])
+
+# Carga de archivos SHP (necesitas shp, shx, dbf)
+st.header("📁 Carga el polígono SHP")
+files = st.file_uploader("Sube los archivos SHP (shp, shx, dbf)", type=['shp', 'shx', 'dbf'], accept_multiple_files=True)
+
+if len(files) >= 3:  # Asegura que se suban al menos los 3 principales
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_paths = {}
+        for file in files:
+            file_path = os.path.join(tmpdirname, file.name)
+            with open(file_path, "wb") as f:
+                f.write(file.getbuffer())
+            file_paths[file.name.lower()] = file_path
+
+        # Lee el SHP
+        shp_path = file_paths.get('*.shp', list(file_paths.values())[0])  # Toma el shp
+        gdf = gpd.read_file(shp_path)
         
-    def crear_mapa_base(self, centro=[-34.6037, -58.3816], zoom=6):
-        """Crea un mapa base con capas de ESRI"""
-        
-        mapa = folium.Map(
-            location=centro,
-            zoom_start=zoom,
-            tiles=self.esri_layers["Imagen Satelital"],
-            attr='Esri'
-        )
-        
-        # Agregar control de capas base
-        for nombre, capa in self.esri_layers.items():
-            if nombre != "Imagen Satelital":  # Ya está como base
-                folium.TileLayer(
-                    capa,
-                    name=nombre,
-                    attr='Esri'
-                ).add_to(mapa)
-        
-        folium.LayerControl().add_to(mapa)
-        
-        # Agregar plugins útiles
-        plugins.Fullscreen().add_to(mapa)
-        plugins.MeasureControl().add_to(mapa)
-        plugins.LocateControl().add_to(mapa)
-        
-        return mapa
-    
-    def agregar_poligono(self, mapa, geojson_data, nombre="Polígono de Análisis"):
-        """Agrega un polígono GeoJSON al mapa"""
-        
-        # Si es un archivo, cargarlo
-        if isinstance(geojson_data, str):
-            with open(geojson_data, 'r', encoding='utf-8') as f:
-                geojson = json.load(f)
-        else:
-            geojson = geojson_data
+        if len(gdf) > 0:
+            st.success("✅ Polígono cargado correctamente.")
             
-        # Crear estilo para el polígono
-        estilo_poligono = {
-            'fillColor': '#3388ff',
-            'color': '#3388ff',
-            'weight': 3,
-            'fillOpacity': 0.2,
-            'dashArray': '5, 5'
-        }
-        
-        # Agregar el polígono al mapa
-        folium.GeoJson(
-            geojson,
-            name=nombre,
-            style_function=lambda x: estilo_poligono,
-            tooltip=folium.GeoJsonTooltip(
-                fields=['name', 'area_ha', 'cultivo'],
-                aliases=['Nombre:', 'Área (ha):', 'Cultivo:'],
-                localize=True
-            )
-        ).add_to(mapa)
-        
-        # Ajustar vista al polígono
-        mapa.fit_bounds(folium.GeoJson(geojson).get_bounds())
-        
-        return mapa
-    
-    def agregar_resultados(self, mapa, resultados_geojson, cultivo):
-        """Agrega los resultados del análisis al mapa"""
-        
-        # Definir colores según el nivel de fertilidad
-        def estilo_fertilidad(feature):
-            fertilidad = feature['properties'].get('fertilidad', 0)
+            # Muestra info básica del polígono
+            st.subheader("ℹ️ Información del polígono")
+            st.write(f"CRS: {gdf.crs}")
+            st.write(f"Área total: {gdf.geometry.area.sum():.2f} unidades")
             
-            if fertilidad >= 80:
-                color = '#00ff00'  # Verde - Alta
-            elif fertilidad >= 60:
-                color = '#ffff00'  # Amarillo - Media
-            elif fertilidad >= 40:
-                color = '#ffa500'  # Naranja - Baja
-            else:
-                color = '#ff0000'  # Rojo - Muy baja
+            # ANÁLISIS SIMULADO (REEMPLAZA CON TU LÓGICA ORIGINAL DE GEE PARA N, P, K)
+            st.header("🔬 Análisis de Nutrientes")
+            with st.spinner("Analizando..."):
+                # Simulación: valores aleatorios de N, P, K (0-100)
+                np.random.seed(42)  # Para reproducibilidad
+                N = np.random.uniform(20, 80)
+                P = np.random.uniform(10, 60)
+                K = np.random.uniform(30, 90)
                 
-            return {
-                'fillColor': color,
-                'color': color,
-                'weight': 2,
-                'fillOpacity': 0.6
-            }
-        
-        # Crear tooltip con información
-        tooltip = folium.GeoJsonTooltip(
-            fields=['fertilidad', 'nitrogeno', 'fosforo', 'potasio', 'ph', 'materia_organica'],
-            aliases=[
-                'Fertilidad (%):',
-                'Nitrógeno (%):',
-                'Fósforo (%):',
-                'Potasio (%):', 
-                'pH:',
-                'Materia Orgánica (%):'
-            ],
-            localize=True,
-            style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
-        )
-        
-        folium.GeoJson(
-            resultados_geojson,
-            name=f"Resultados {cultivo}",
-            style_function=estilo_fertilidad,
-            tooltip=tooltip
-        ).add_to(mapa)
-        
-        # Agregar leyenda
-        self.agregar_leyenda(mapa, cultivo)
-        
-        return mapa
-    
-    def agregar_leyenda(self, mapa, cultivo):
-        """Agrega una leyenda al mapa"""
-        
-        leyenda_html = f'''
-        <div style="position: fixed; 
-                    bottom: 50px; left: 50px; width: 220px; height: 180px; 
-                    background-color: white; border:2px solid grey; z-index:9999; 
-                    font-size:12px; padding: 10px; border-radius: 5px;
-                    box-shadow: 0 0 10px rgba(0,0,0,0.2);">
-            <p style="margin:0 0 8px 0; font-weight:bold; text-align:center;">
-                🌱 {cultivo} - Niveles de Fertilidad
-            </p>
-            <p style="margin:2px 0;"><i style="background:#00ff00; width:12px; height:12px; display:inline-block; margin-right:5px;"></i> Alta (80-100%)</p>
-            <p style="margin:2px 0;"><i style="background:#ffff00; width:12px; height:12px; display:inline-block; margin-right:5px;"></i> Media (60-79%)</p>
-            <p style="margin:2px 0;"><i style="background:#ffa500; width:12px; height:12px; display:inline-block; margin-right:5px;"></i> Baja (40-59%)</p>
-            <p style="margin:2px 0;"><i style="background:#ff0000; width:12px; height:12px; display:inline-block; margin-right:5px;"></i> Muy baja (<40%)</p>
-            <hr style="margin:8px 0;">
-            <p style="margin:4px 0; font-size:10px; color:#666;">🗺️ Capas ESRI disponibles</p>
-        </div>
-        '''
-        
-        mapa.get_root().html.add_child(folium.Element(leyenda_html))
-    
-    def guardar_mapa(self, mapa, nombre_archivo="analisis_fertilidad.html"):
-        """Guarda el mapa como archivo HTML"""
-        # Asegurar directorio de resultados
-        os.makedirs('resultados', exist_ok=True)
-        
-        ruta_completa = os.path.join('resultados', nombre_archivo)
-        mapa.save(ruta_completa)
-        return ruta_completa
+                # Recomendaciones por cultivo (simplificadas; integra las tuyas del original)
+                if cultivo == "Trigo":
+                    rec_N = max(0, 100 - N)
+                    rec_P = max(0, 50 - P)
+                    rec_K = max(0, 70 - K)
+                    st.metric("Recomendación N", f"{rec_N:.1f} kg/ha")
+                    st.metric("Recomendación P", f"{rec_P:.1f} kg/ha")
+                    st.metric("Recomendación K", f"{rec_K:.1f} kg/ha")
+                elif cultivo == "Maíz":
+                    rec_N = max(0, 150 - N)
+                    rec_P = max(0, 60 - P)
+                    rec_K = max(0, 80 - K)
+                    st.metric("Recomendación N", f"{rec_N:.1f} kg/ha")
+                    st.metric("Recomendación P", f"{rec_P:.1f} kg/ha")
+                    st.metric("Recomendación K", f"{rec_K:.1f} kg/ha")
+                # Agrega casos para Soja, Sorgo, Girasol similares...
+                else:
+                    st.info("Recomendaciones para otros cultivos en desarrollo.")
+                
+                # Resultados en tabla
+                df_result = pd.DataFrame({
+                    "Nutriente": ["N", "P", "K"],
+                    "Valor Actual": [f"{N:.1f}", f"{P:.1f}", f"{K:.1f}"],
+                    "Recomendación": [f"{rec_N:.1f}", f"{rec_P:.1f}", f"{rec_K:.1f}"]
+                })
+                st.table(df_result)
+            
+            # MAPA CON BASE ESRI
+            st.header("🗺️ Visualización en Mapa ESRI")
+            geom = gdf.geometry.iloc[0]  # Asume un solo polígono
+            bounds = geom.bounds
+            center_lat = (bounds[1] + bounds[3]) / 2
+            center_lon = (bounds[0] + bounds[2]) / 2
+            
+            # Crea mapa Folium con base ESRI
+            m = folium.Map(location=[center_lat, center_lon], zoom_start=12)
+            
+            # Capa base ESRI World Street Map
+            esri_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'
+            folium.TileLayer(esri_url, name='ESRI World Street Map', attr='ESRI').add_to(m)
+            
+            # Agrega el polígono
+            folium.GeoJson(
+                gdf,
+                style_function=lambda x: {'fillColor': 'blue', 'color': 'black', 'weight': 2, 'fillOpacity': 0.3},
+                popup=folium.GeoJsonTooltip(fields=['name'])  # Si hay campo 'name'
+            ).add_to(m)
+            
+            # Overlay de resultados (ej. marcador con fertilidad promedio)
+            fertilidad_prom = (N + P + K) / 3 / 100  # Normalizado 0-1
+            color = 'green' if fertilidad_prom > 0.6 else 'yellow' if fertilidad_prom > 0.4 else 'red'
+            folium.CircleMarker(
+                location=[center_lat, center_lon],
+                radius=15,
+                popup=f"Fertilidad promedio: {fertilidad_prom:.2f}<br>Cultivo: {cultivo}",
+                color=color,
+                fill=True,
+                fillColor=color
+            ).add_to(m)
+            
+            # Control de capas
+            folium.LayerControl().add_to(m)
+            
+            # Muestra el mapa en Streamlit
+            folium_static(m, width=700, height=500)
+            
+        else:
+            st.error("No se encontró geometría en el SHP.")
+else:
+    st.warning("⚠️ Sube al menos los archivos .shp, .shx y .dbf para continuar.")
+    st.info("Nota: Si tu SHP tiene más archivos (ej. .prj), súbelos también.")
 
-def convertir_resultados_a_geojson(resultados, poligono_path):
-    """Convierte los resultados del análisis a formato GeoJSON"""
-    
-    # Cargar el polígono original
-    with open(poligono_path, 'r', encoding='utf-8') as f:
-        poligono_geojson = json.load(f)
-    
-    # Agregar propiedades de resultados al GeoJSON
-    for feature in poligono_geojson['features']:
-        feature['properties'].update(resultados)
-    
-    return poligono_geojson
-
-def integrar_con_analizador(poligono_path, resultados, cultivo, centro_mapa=None):
-    """
-    Función principal para integrar con el analizador existente
-    
-    Args:
-        poligono_path (str): Ruta al archivo GeoJSON del polígono
-        resultados (dict): Resultados del análisis de fertilidad
-        cultivo (str): Tipo de cultivo analizado
-        centro_mapa (list): Coordenadas [lat, lon] para centrar el mapa
-    """
-    
-    # Crear instancia del mapa
-    analizador_mapa = MapaAnalizador()
-    
-    # Determinar centro del mapa
-    if centro_mapa is None:
-        centro_mapa = [-34.6037, -58.3816]  # Buenos Aires por defecto
-    
-    # Crear mapa base
-    mapa = analizador_mapa.crear_mapa_base(centro=centro_mapa)
-    
-    # Agregar polígono de análisis
-    mapa = analizador_mapa.agregar_poligono(mapa, poligono_path)
-    
-    # Convertir resultados a GeoJSON
-    resultados_geojson = convertir_resultados_a_geojson(resultados, poligono_path)
-    
-    # Agregar resultados al mapa
-    mapa = analizador_mapa.agregar_resultados(mapa, resultados_geojson, cultivo)
-    
-    # Generar nombre de archivo
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre_archivo = f"fertilidad_{cultivo.lower()}_{timestamp}.html"
-    
-    # Guardar mapa
-    archivo_html = analizador_mapa.guardar_mapa(mapa, nombre_archivo)
-    
-    return archivo_html
-
-if __name__ == "__main__":
-    print("🌍 Módulo de Mapas ESRI para Analizador de Fertilidad")
-    print("💡 Usa: from mapa_analizador import integrar_con_analizador")
+# Pie de página
+st.markdown("---")
+st.markdown("Desarrollado con ❤️ usando Streamlit y ESRI basemaps.")
