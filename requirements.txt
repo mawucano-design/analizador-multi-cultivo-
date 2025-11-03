@@ -9,3 +9,4 @@ plotly>=5.13.0
 streamlit-folium>=0.18.0
 pillow>=10.0.0
 fiona>=1.9.0
+sentinelhub>=3.11.0
