@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import tempfile
 import zipfile
 import io
+import fiona
 
 # Configuración de la página
 st.set_page_config(
@@ -81,34 +82,139 @@ def crear_ejemplo_geojson():
     return ejemplo_geojson
 
 def procesar_archivo_subido(archivo):
-    """Procesa archivos GeoJSON o ZIP con polígonos"""
+    """Procesa archivos GeoJSON, Shapefile (ZIP) u otros formatos geoespaciales"""
     try:
-        if archivo.name.endswith('.geojson') or archivo.name.endswith('.json'):
-            # Es un GeoJSON directo
-            geojson_data = json.load(archivo)
-            return geojson_data
+        # Leer el contenido del archivo en memoria
+        contenido = archivo.read()
         
-        elif archivo.name.endswith('.zip'):
-            # Es un ZIP, extraer GeoJSON
-            with zipfile.ZipFile(archivo, 'r') as zip_ref:
-                # Buscar archivos GeoJSON en el ZIP
-                geojson_files = [f for f in zip_ref.namelist() if f.endswith(('.geojson', '.json'))]
-                
-                if not geojson_files:
-                    st.error("❌ No se encontraron archivos GeoJSON en el ZIP")
-                    return None
-                
-                # Tomar el primer GeoJSON encontrado
-                with zip_ref.open(geojson_files[0]) as geojson_file:
-                    geojson_data = json.load(geojson_file)
-                    return geojson_data
+        # Intentar como GeoJSON primero
+        if archivo.name.lower().endswith(('.geojson', '.json')):
+            try:
+                archivo.seek(0)  # Volver al inicio del archivo
+                geojson_data = json.load(archivo)
+                st.success("✅ Archivo GeoJSON procesado correctamente")
+                return geojson_data
+            except json.JSONDecodeError:
+                st.error("❌ El archivo no es un GeoJSON válido")
+                return None
+        
+        # Procesar archivo ZIP (posible Shapefile u otros)
+        elif archivo.name.lower().endswith('.zip'):
+            return procesar_archivo_zip(contenido, archivo.name)
         
         else:
-            st.error("❌ Formato de archivo no soportado. Usa .geojson, .json o .zip")
+            st.error("❌ Formato de archivo no soportado")
             return None
             
     except Exception as e:
         st.error(f"❌ Error procesando archivo: {str(e)}")
+        return None
+
+def procesar_archivo_zip(contenido_zip, nombre_archivo):
+    """Procesa archivos ZIP que pueden contener Shapefiles, GeoJSON, etc."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(contenido_zip), 'r') as zip_ref:
+            # Listar todos los archivos en el ZIP
+            archivos = zip_ref.namelist()
+            st.info(f"📁 Archivos en el ZIP: {', '.join(archivos)}")
+            
+            # Buscar Shapefiles (.shp, .dbf, .shx, .prj)
+            shp_files = [f for f in archivos if f.lower().endswith('.shp')]
+            if shp_files:
+                return procesar_shapefile_desde_zip(zip_ref, shp_files[0])
+            
+            # Buscar GeoJSON
+            geojson_files = [f for f in archivos if f.lower().endswith(('.geojson', '.json'))]
+            if geojson_files:
+                return procesar_geojson_desde_zip(zip_ref, geojson_files[0])
+            
+            # Buscar KML
+            kml_files = [f for f in archivos if f.lower().endswith('.kml')]
+            if kml_files:
+                return procesar_kml_desde_zip(zip_ref, kml_files[0])
+            
+            # Si no encuentra formatos conocidos, buscar cualquier archivo que pueda ser geoespacial
+            for archivo in archivos:
+                if any(ext in archivo.lower() for ext in ['.shp', '.geojson', '.json', '.kml', '.gpkg']):
+                    st.warning(f"🔍 Intentando procesar: {archivo}")
+                    try:
+                        if archivo.lower().endswith(('.geojson', '.json')):
+                            return procesar_geojson_desde_zip(zip_ref, archivo)
+                        elif archivo.lower().endswith('.shp'):
+                            return procesar_shapefile_desde_zip(zip_ref, archivo)
+                        elif archivo.lower().endswith('.kml'):
+                            return procesar_kml_desde_zip(zip_ref, archivo)
+                    except Exception as e:
+                        st.warning(f"⚠️ No se pudo procesar {archivo}: {str(e)}")
+                        continue
+            
+            st.error("❌ No se encontraron archivos geoespaciales en el ZIP")
+            st.info("""
+            **Formatos soportados:**
+            - Shapefile (.shp con .dbf, .shx)
+            - GeoJSON (.geojson, .json)
+            - KML (.kml)
+            """)
+            return None
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando ZIP: {str(e)}")
+        return None
+
+def procesar_shapefile_desde_zip(zip_ref, shp_file):
+    """Procesa Shapefile desde archivo ZIP"""
+    try:
+        # Crear directorio temporal
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Extraer todos los archivos del shapefile
+            for file in zip_ref.namelist():
+                if file.startswith(os.path.splitext(shp_file)[0]):
+                    zip_ref.extract(file, temp_dir)
+            
+            # Leer el shapefile con geopandas
+            shp_path = os.path.join(temp_dir, shp_file)
+            gdf = gpd.read_file(shp_path)
+            
+            # Convertir a GeoJSON
+            geojson_data = json.loads(gdf.to_json())
+            
+            st.success(f"✅ Shapefile procesado: {len(gdf)} features encontrados")
+            return geojson_data
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando Shapefile: {str(e)}")
+        return None
+
+def procesar_geojson_desde_zip(zip_ref, geojson_file):
+    """Procesa GeoJSON desde archivo ZIP"""
+    try:
+        with zip_ref.open(geojson_file) as f:
+            geojson_data = json.load(f)
+            st.success(f"✅ GeoJSON procesado: {geojson_file}")
+            return geojson_data
+    except Exception as e:
+        st.error(f"❌ Error procesando GeoJSON {geojson_file}: {str(e)}")
+        return None
+
+def procesar_kml_desde_zip(zip_ref, kml_file):
+    """Procesa KML desde archivo ZIP"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Extraer KML
+            kml_path = os.path.join(temp_dir, kml_file)
+            zip_ref.extract(kml_file, temp_dir)
+            
+            # Leer KML con geopandas
+            gdf = gpd.read_file(kml_path, driver='KML')
+            
+            # Convertir a GeoJSON
+            geojson_data = json.loads(gdf.to_json())
+            
+            st.success(f"✅ KML procesado: {len(gdf)} features encontrados")
+            return geojson_data
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando KML: {str(e)}")
         return None
 
 def simular_analisis_sentinel(cultivo, area_ha=100):
@@ -155,79 +261,91 @@ def simular_analisis_sentinel(cultivo, area_ha=100):
 def crear_mapa_interactivo(geojson_data, resultados, cultivo, key_suffix=""):
     """Crea un mapa interactivo con los resultados"""
     
-    # Determinar centro del mapa desde el GeoJSON
-    coords = geojson_data['features'][0]['geometry']['coordinates'][0]
-    lats = [coord[1] for coord in coords]
-    lons = [coord[0] for coord in coords]
-    centro = [np.mean(lats), np.mean(lons)]
-    
-    # Crear mapa
-    m = folium.Map(
-        location=centro,
-        zoom_start=12,
-        tiles='OpenStreetMap'
-    )
-    
-    # Agregar capas base ESRI
-    folium.TileLayer(
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri',
-        name='Esri Satélite',
-        overlay=False
-    ).add_to(m)
-    
-    folium.TileLayer(
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri',
-        name='Esri Calles',
-        overlay=False
-    ).add_to(m)
-    
-    # Estilo según salud del cultivo
-    if resultados:
-        salud = resultados.get('salud_general', 50)
-        if salud >= 80:
-            color = 'green'
-            fill_color = 'green'
-        elif salud >= 60:
-            color = 'yellow'
-            fill_color = 'yellow'
-        elif salud >= 40:
-            color = 'orange'
-            fill_color = 'orange'
+    try:
+        # Determinar centro del mapa desde el GeoJSON
+        if 'features' in geojson_data and len(geojson_data['features']) > 0:
+            feature = geojson_data['features'][0]
+            if 'geometry' in feature and 'coordinates' in feature['geometry']:
+                coords = feature['geometry']['coordinates'][0]
+                lats = [coord[1] for coord in coords]
+                lons = [coord[0] for coord in coords]
+                centro = [np.mean(lats), np.mean(lons)]
+            else:
+                centro = [-34.6037, -58.3816]  # Buenos Aires por defecto
         else:
-            color = 'red'
-            fill_color = 'red'
-    else:
-        color = 'blue'
-        fill_color = 'blue'
-    
-    # Agregar polígono
-    folium.GeoJson(
-        geojson_data,
-        name='Área de Cultivo',
-        style_function=lambda x: {
-            'fillColor': fill_color,
-            'color': color,
-            'weight': 3,
-            'fillOpacity': 0.6,
-            'dashArray': '5, 5'
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=['name', 'area_ha', 'cultivo'],
-            aliases=['Nombre:', 'Área (ha):', 'Cultivo:'],
-            style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+            centro = [-34.6037, -58.3816]  # Buenos Aires por defecto
+        
+        # Crear mapa
+        m = folium.Map(
+            location=centro,
+            zoom_start=10,
+            tiles='OpenStreetMap'
         )
-    ).add_to(m)
-    
-    # Agregar plugins
-    plugins.Fullscreen().add_to(m)
-    plugins.MeasureControl().add_to(m)
-    
-    # Control de capas
-    folium.LayerControl().add_to(m)
-    
-    return m
+        
+        # Agregar capas base ESRI
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri',
+            name='Esri Satélite',
+            overlay=False
+        ).add_to(m)
+        
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri',
+            name='Esri Calles',
+            overlay=False
+        ).add_to(m)
+        
+        # Estilo según salud del cultivo
+        if resultados:
+            salud = resultados.get('salud_general', 50)
+            if salud >= 80:
+                color = 'green'
+                fill_color = 'green'
+            elif salud >= 60:
+                color = 'yellow'
+                fill_color = 'yellow'
+            elif salud >= 40:
+                color = 'orange'
+                fill_color = 'orange'
+            else:
+                color = 'red'
+                fill_color = 'red'
+        else:
+            color = 'blue'
+            fill_color = 'blue'
+        
+        # Agregar polígono
+        folium.GeoJson(
+            geojson_data,
+            name='Área de Cultivo',
+            style_function=lambda x: {
+                'fillColor': fill_color,
+                'color': color,
+                'weight': 3,
+                'fillOpacity': 0.6,
+            },
+            tooltip=folium.GeoJsonTooltip(
+                fields=['name', 'area_ha', 'cultivo'] if 'features' in geojson_data and geojson_data['features'] and 'properties' in geojson_data['features'][0] else [],
+                aliases=['Nombre:', 'Área (ha):', 'Cultivo:'],
+                style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+            )
+        ).add_to(m)
+        
+        # Agregar plugins
+        plugins.Fullscreen().add_to(m)
+        plugins.MeasureControl().add_to(m)
+        
+        # Control de capas
+        folium.LayerControl().add_to(m)
+        
+        return m
+        
+    except Exception as e:
+        st.error(f"❌ Error creando el mapa: {str(e)}")
+        # Mapa de respaldo
+        return folium.Map(location=[-34.6037, -58.3816], zoom_start=4)
 
 def main():
     # Header principal
@@ -241,6 +359,8 @@ def main():
         st.session_state.resultados = None
     if 'map_key' not in st.session_state:
         st.session_state.map_key = 0
+    if 'archivo_procesado' not in st.session_state:
+        st.session_state.archivo_procesado = False
     
     # Sidebar para configuración
     with st.sidebar:
@@ -267,31 +387,30 @@ def main():
         usar_ejemplo = st.checkbox("Usar polígono de ejemplo", value=True, key="usar_ejemplo")
         
         if not usar_ejemplo:
+            st.info("""
+            **Formatos soportados:**
+            - 🔹 GeoJSON (.geojson, .json)
+            - 🔹 Shapefile (.zip con .shp, .dbf, .shx)
+            - 🔹 KML (.kml, .zip con .kml)
+            """)
+            
             archivo_subido = st.file_uploader(
-                "Subir archivo GeoJSON o ZIP",
-                type=['geojson', 'json', 'zip'],
-                help="Sube un archivo GeoJSON o ZIP que contenga polígonos de tu campo",
+                "Subir archivo geoespacial",
+                type=['geojson', 'json', 'zip', 'kml'],
+                help="Sube Shapefile (ZIP), GeoJSON o KML con polígonos de tu campo",
                 key="file_uploader"
             )
             
             if archivo_subido is not None:
-                with st.spinner("Procesando archivo..."):
-                    nuevo_geojson = procesar_archivo_subido(archivo_subido)
-                    if nuevo_geojson is not None:
-                        st.session_state.geojson_data = nuevo_geojson
-                        st.session_state.map_key += 1  # Forzar actualización del mapa
-                        st.success(f"✅ Archivo procesado: {archivo_subido.name}")
-        
-        # Configuración Sentinel Hub (para futura integración)
-        st.subheader("🛰️ Configuración Sentinel Hub")
-        st.warning("""
-        ⚠️ **Modo Demo Activado**
-        
-        Esta versión usa datos simulados. Para análisis con imágenes reales de Sentinel-2, configura tus credenciales:
-        """)
-        
-        client_id = st.text_input("Client ID", type="password", placeholder="Tu Client ID de Sentinel Hub", key="b296cf70-c9d2-4e69-91f4-f7be80b99ed1")
-        client_secret = st.text_input("Client Secret", type="password", placeholder="Tu Client Secret de Sentinel Hub", key="358474d6-2326-4637-bf8e-30a709b2d6a6")
+                if not st.session_state.archivo_procesado or st.button("Reprocesar archivo"):
+                    with st.spinner("🔍 Analizando archivo..."):
+                        nuevo_geojson = procesar_archivo_subido(archivo_subido)
+                        if nuevo_geojson is not None:
+                            st.session_state.geojson_data = nuevo_geojson
+                            st.session_state.map_key += 1
+                            st.session_state.archivo_procesado = True
+                            st.session_state.resultados = None  # Resetear resultados
+                            st.rerun()
         
         # Botón de análisis
         analizar = st.button("🚀 Ejecutar Análisis", type="primary", use_container_width=True, key="analizar_btn")
@@ -300,7 +419,8 @@ def main():
             with st.spinner("🔍 Analizando con Sentinel-2..."):
                 # Simular análisis (en producción esto se conectaría con Sentinel Hub)
                 st.session_state.resultados = simular_analisis_sentinel(cultivo)
-                st.session_state.map_key += 1  # Forzar actualización del mapa
+                st.session_state.map_key += 1
+                st.rerun()
     
     # Contenido principal
     col1, col2 = st.columns([1, 1])
@@ -309,9 +429,15 @@ def main():
         st.subheader("🗺️ Mapa del Área")
         
         # Mostrar información del área
-        if 'name' in st.session_state.geojson_data['features'][0]['properties']:
-            nombre_campo = st.session_state.geojson_data['features'][0]['properties']['name']
-            st.info(f"📍 **Área:** {nombre_campo}")
+        if (st.session_state.geojson_data and 
+            'features' in st.session_state.geojson_data and 
+            len(st.session_state.geojson_data['features']) > 0 and
+            'properties' in st.session_state.geojson_data['features'][0]):
+            
+            propiedades = st.session_state.geojson_data['features'][0]['properties']
+            nombre_campo = propiedades.get('name', 'Polígono sin nombre')
+            area_ha = propiedades.get('area_ha', 'N/A')
+            st.info(f"📍 **Área:** {nombre_campo} | **Superficie:** {area_ha} ha")
         else:
             st.info("📍 **Área:** Polígono cargado")
         
@@ -370,9 +496,7 @@ def main():
             col_idx1, col_idx2 = st.columns(2)
             
             with col_idx1:
-                # Simular gráfico NDVI
                 import plotly.graph_objects as go
-                
                 fig_ndvi = go.Figure()
                 fig_ndvi.add_trace(go.Indicator(
                     mode = "gauge+number",
@@ -386,19 +510,13 @@ def main():
                             {'range': [0, 0.3], 'color': "lightgray"},
                             {'range': [0.3, 0.6], 'color': "yellow"},
                             {'range': [0.6, 1], 'color': "green"}
-                        ],
-                        'threshold': {
-                            'line': {'color': "red", 'width': 4},
-                            'thickness': 0.75,
-                            'value': resultados['ndvi_stats']['media']
-                        }
+                        ]
                     }
                 ))
                 fig_ndvi.update_layout(height=300)
                 st.plotly_chart(fig_ndvi, use_container_width=True)
             
             with col_idx2:
-                # Simular gráfico NDWI
                 fig_ndwi = go.Figure()
                 fig_ndwi.add_trace(go.Indicator(
                     mode = "gauge+number",
@@ -417,25 +535,6 @@ def main():
                 ))
                 fig_ndwi.update_layout(height=300)
                 st.plotly_chart(fig_ndwi, use_container_width=True)
-            
-            # Estadísticas detalladas
-            st.subheader("📋 Estadísticas Detalladas")
-            
-            col_stat1, col_stat2 = st.columns(2)
-            
-            with col_stat1:
-                st.write("**NDVI**")
-                st.write(f"• Máximo: {resultados['ndvi_stats']['max']:.3f}")
-                st.write(f"• Mínimo: {resultados['ndvi_stats']['min']:.3f}")
-                st.write(f"• Desviación: {resultados['ndvi_stats']['std']:.3f}")
-                st.write(f"• En rango óptimo: {resultados['ndvi_en_rango']:.1f}%")
-            
-            with col_stat2:
-                st.write("**NDWI**")
-                st.write(f"• Máximo: {resultados['ndwi_stats']['max']:.3f}")
-                st.write(f"• Mínimo: {resultados['ndwi_stats']['min']:.3f}")
-                st.write(f"• Desviación: {resultados['ndwi_stats']['std']:.3f}")
-                st.write(f"• En rango óptimo: {resultados['ndwi_en_rango']:.1f}%")
             
             # Recomendaciones
             st.subheader("💡 Recomendaciones")
@@ -480,42 +579,20 @@ def main():
             2. Configura las opciones de análisis
             3. Haz clic en **"Ejecutar Análisis"**
             
-            **Características:**
-            - 🌱 Análisis de 5 cultivos diferentes
-            - 🛰️ Integración con Sentinel-2 (modo demo)
-            - 📊 Métricas de salud vegetal
-            - 💡 Recomendaciones automáticas
-            - 🗺️ Mapas interactivos con ESRI
-            - 📁 Soporte para GeoJSON y ZIP
-            """)
+            **Formatos soportados:**
+            - 🔹 Shapefile (ZIP con .shp, .dbf, .shx, .prj)
+            - 🔹 GeoJSON (.geojson, .json)
+            - 🔹 KML (.kml)
             
-            # Instrucciones para cargar archivos
-            if not st.session_state.get('usar_ejemplo', True):
-                st.subheader("📁 Formatos Soportados")
-                st.write("""
-                **GeoJSON:** Archivo .geojson o .json con polígonos
-                **ZIP:** Archivo comprimido que contenga GeoJSON
-                
-                **Estructura esperada:**
-                ```json
-                {
-                  "type": "FeatureCollection",
-                  "features": [
-                    {
-                      "type": "Feature",
-                      "properties": {
-                        "name": "Nombre del Campo",
-                        "area_ha": 100
-                      },
-                      "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [...]
-                      }
-                    }
-                  ]
-                }
-                ```
-                """)
+            **Ejemplo de estructura ZIP para Shapefile:**
+            ```
+            mi_campo.zip
+            ├── mi_campo.shp
+            ├── mi_campo.dbf
+            ├── mi_campo.shx
+            └── mi_campo.prj (opcional)
+            ```
+            """)
     
     # Footer
     st.markdown("---")
