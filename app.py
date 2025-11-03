@@ -21,8 +21,8 @@ def init_sentinel_hub():
     try:
         if "sentinel_hub" in st.secrets:
             config = SHConfig()
-            config.sh_client_id = st.secrets["sentinel_hub"]["b296cf70-c9d2-4e69-91f4-f7be80b99ed1"]
-            config.sh_client_secret = st.secrets["sentinel_hub"]["358474d6-2326-4637-bf8e-30a709b2d6a6"]
+            config.sh_client_id = st.secrets["sentinel_hub"]["client_id"]
+            config.sh_client_secret = st.secrets["sentinel_hub"]["client_secret"]
             st.success("Sentinel Hub autenticado")
             return config
         else:
