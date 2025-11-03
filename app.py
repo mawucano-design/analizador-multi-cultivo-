@@ -102,6 +102,7 @@ class AnalizadorFertilidad:
     def analizar_fertilidad(self, geojson_data, cultivo, fecha_inicio, fecha_fin):
         """Analiza la fertilidad del suelo con datos realistas"""
         try:
+            st.info("🔍 Iniciando análisis de fertilidad...")
             cultivo_info = CULTIVOS[cultivo]
             
             # Generar datos de fertilidad realistas basados en el cultivo
@@ -113,6 +114,8 @@ class AnalizadorFertilidad:
             potasio = random.uniform(30, 120)
             ph = random.uniform(5.0, 8.0)
             materia_organica = random.uniform(1.5, 4.5)
+            
+            st.info(f"📊 Valores generados - N: {nitrogeno:.1f}, P: {fosforo:.1f}, K: {potasio:.1f}, pH: {ph:.2f}")
             
             # Calcular índices de fertilidad
             indice_n = self._calcular_indice_nutriente(nitrogeno, cultivo_info['npk_optimo']['N'])
@@ -128,7 +131,9 @@ class AnalizadorFertilidad:
                 nitrogeno, fosforo, potasio, ph, cultivo_info
             )
             
-            return {
+            st.success("✅ Análisis de fertilidad completado")
+            
+            resultados = {
                 'fertilidad_general': round(fertilidad_general, 1),
                 'nutrientes': {
                     'nitrogeno': round(nitrogeno, 1),
@@ -147,8 +152,12 @@ class AnalizadorFertilidad:
                 'fecha_analisis': datetime.now().strftime("%d/%m/%Y %H:%M"),
                 'cultivo': cultivo_info['nombre']
             }
+            
+            st.info(f"🎯 Fertilidad general calculada: {resultados['fertilidad_general']}%")
+            return resultados
+            
         except Exception as e:
-            st.error(f"Error en análisis de fertilidad: {str(e)}")
+            st.error(f"❌ Error en análisis de fertilidad: {str(e)}")
             return None
     
     def _calcular_indice_nutriente(self, valor, rango_optimo):
@@ -375,11 +384,13 @@ def main():
     # Header principal
     st.markdown('<h1 class="main-header">🌱 Analizador de Fertilidad Multi-Cultivo</h1>', unsafe_allow_html=True)
     
-    # Inicializar estado
+    # Inicializar estado de la sesión
     if 'geojson_data' not in st.session_state:
         st.session_state.geojson_data = None
     if 'resultados' not in st.session_state:
         st.session_state.resultados = None
+    if 'analisis_completado' not in st.session_state:
+        st.session_state.analisis_completado = False
     
     # Sidebar
     with st.sidebar:
@@ -422,12 +433,16 @@ def main():
             help="Archivo ZIP con Shapefile o KML de Google Earth"
         )
         
-        if archivo:
-            with st.spinner("Procesando archivo..."):
-                geojson_data = procesar_archivo_subido(archivo)
-                if geojson_data:
-                    st.session_state.geojson_data = geojson_data
-                    st.session_state.resultados = None  # Resetear resultados anteriores
+        if archivo is not None:
+            if st.session_state.geojson_data is None or st.button("🔄 Reprocesar archivo"):
+                with st.spinner("Procesando archivo..."):
+                    geojson_data = procesar_archivo_subido(archivo)
+                    if geojson_data is not None:
+                        st.session_state.geojson_data = geojson_data
+                        st.session_state.resultados = None
+                        st.session_state.analisis_completado = False
+                        st.success("✅ Archivo cargado correctamente")
+                        st.rerun()
         
         # Fechas de análisis
         st.markdown("---")
@@ -442,21 +457,44 @@ def main():
         st.markdown("---")
         analizar_disabled = st.session_state.geojson_data is None
         
-        if st.button(
-            "🚀 Ejecutar Análisis de Fertilidad", 
-            type="primary", 
-            use_container_width=True,
-            disabled=analizar_disabled
-        ):
-            if st.session_state.geojson_data:
-                with st.spinner("Analizando fertilidad del suelo..."):
-                    analizador = AnalizadorFertilidad()
-                    st.session_state.resultados = analizador.analizar_fertilidad(
-                        st.session_state.geojson_data, cultivo, fecha_inicio, fecha_fin
-                    )
-            else:
-                st.error("Primero carga un archivo con el polígono del lote")
-    
+        # Usar un formulario para evitar el rerun automático
+        with st.form(key="analisis_form"):
+            if st.form_submit_button(
+                "🚀 Ejecutar Análisis de Fertilidad", 
+                type="primary", 
+                use_container_width=True,
+                disabled=analizar_disabled
+            ):
+                if st.session_state.geojson_data:
+                    # Crear un contenedor para los mensajes de progreso
+                    progress_placeholder = st.empty()
+                    
+                    with progress_placeholder.container():
+                        st.info("🔄 Iniciando análisis de fertilidad...")
+                        
+                        try:
+                            analizador = AnalizadorFertilidad()
+                            resultados = analizador.analizar_fertilidad(
+                                st.session_state.geojson_data, cultivo, fecha_inicio, fecha_fin
+                            )
+                            
+                            if resultados is not None:
+                                st.session_state.resultados = resultados
+                                st.session_state.analisis_completado = True
+                                st.success("🎉 ¡Análisis completado exitosamente!")
+                                
+                                # Forzar actualización después de 2 segundos
+                                import time
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ No se pudieron generar los resultados")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error durante el análisis: {str(e)}")
+                else:
+                    st.error("❌ Primero carga un archivo con el polígono del lote")
+
     # Contenido principal
     col1, col2 = st.columns([2, 1])
     
@@ -480,7 +518,7 @@ def main():
     with col2:
         st.markdown('<h3 class="section-header">📊 Resultados de Fertilidad</h3>', unsafe_allow_html=True)
         
-        if st.session_state.resultados:
+        if st.session_state.analisis_completado and st.session_state.resultados:
             resultados = st.session_state.resultados
             
             # Métricas principales
