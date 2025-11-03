@@ -39,6 +39,13 @@ st.markdown("""
         padding-bottom: 0.5rem;
         margin-bottom: 1rem;
     }
+    .warning-box {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -91,20 +98,97 @@ class AnalizadorCultivos:
         else:
             return "🔴 Estado crítico. Revisión urgente necesaria."
 
-def cargar_geojson(archivo):
-    """Carga y procesa archivos GeoJSON"""
+def procesar_archivo_subido(archivo):
+    """Procesa archivos ZIP y KML"""
     try:
-        if archivo.name.endswith('.zip'):
-            with zipfile.ZipFile(archivo, 'r') as zip_ref:
-                # Buscar GeoJSON en el ZIP
-                for file in zip_ref.namelist():
-                    if file.endswith(('.geojson', '.json')):
-                        with zip_ref.open(file) as f:
-                            return json.load(f)
+        st.info(f"📂 Procesando archivo: {archivo.name}")
+        
+        if archivo.name.lower().endswith('.zip'):
+            return procesar_archivo_zip(archivo.read(), archivo.name)
+        elif archivo.name.lower().endswith('.kml'):
+            return procesar_archivo_kml(archivo.read(), archivo.name)
         else:
-            return json.load(archivo)
+            st.error("❌ Formato no soportado. Solo se aceptan ZIP y KML.")
+            return None
+            
     except Exception as e:
-        st.error(f"Error cargando archivo: {e}")
+        st.error(f"❌ Error procesando archivo: {str(e)}")
+        return None
+
+def procesar_archivo_zip(contenido_zip, nombre_archivo):
+    """Procesa archivos ZIP que contengan Shapefiles o KML"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(contenido_zip), 'r') as zip_ref:
+            archivos = zip_ref.namelist()
+            st.info(f"📁 Archivos en el ZIP: {', '.join(archivos)}")
+            
+            # Buscar Shapefiles (.shp)
+            shp_files = [f for f in archivos if f.lower().endswith('.shp')]
+            if shp_files:
+                return procesar_shapefile_desde_zip(zip_ref, shp_files[0])
+            
+            # Buscar KML
+            kml_files = [f for f in archivos if f.lower().endswith('.kml')]
+            if kml_files:
+                return procesar_kml_desde_zip(zip_ref, kml_files[0])
+            
+            st.error("❌ No se encontraron archivos Shapefile (.shp) o KML (.kml) en el ZIP")
+            return None
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando ZIP: {str(e)}")
+        return None
+
+def procesar_shapefile_desde_zip(zip_ref, shp_file):
+    """Procesa Shapefile desde archivo ZIP"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Extraer todos los archivos del shapefile
+            base_name = os.path.splitext(shp_file)[0]
+            for file in zip_ref.namelist():
+                if file.startswith(base_name):
+                    zip_ref.extract(file, temp_dir)
+            
+            # Leer el shapefile
+            shp_path = os.path.join(temp_dir, shp_file)
+            gdf = gpd.read_file(shp_path)
+            
+            st.success(f"✅ Shapefile procesado: {len(gdf)} polígonos encontrados")
+            return json.loads(gdf.to_json())
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando Shapefile: {str(e)}")
+        return None
+
+def procesar_kml_desde_zip(zip_ref, kml_file):
+    """Procesa KML desde archivo ZIP"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_ref.extract(kml_file, temp_dir)
+            kml_path = os.path.join(temp_dir, kml_file)
+            gdf = gpd.read_file(kml_path, driver='KML')
+            
+            st.success(f"✅ KML procesado: {len(gdf)} polígonos encontrados")
+            return json.loads(gdf.to_json())
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando KML: {str(e)}")
+        return None
+
+def procesar_archivo_kml(contenido_kml, nombre_archivo):
+    """Procesa archivos KML directos"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kml_path = os.path.join(temp_dir, "archivo.kml")
+            with open(kml_path, 'wb') as f:
+                f.write(contenido_kml)
+            
+            gdf = gpd.read_file(kml_path, driver='KML')
+            st.success(f"✅ KML procesado: {len(gdf)} polígonos encontrados")
+            return json.loads(gdf.to_json())
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando KML: {str(e)}")
         return None
 
 def crear_mapa(geojson_data, resultados=None):
@@ -126,15 +210,33 @@ def crear_mapa(geojson_data, resultados=None):
             name='Satélite'
         ).add_to(m)
         
+        folium.TileLayer(
+            'OpenStreetMap',
+            name='OpenStreetMap'
+        ).add_to(m)
+        
         # Agregar polígono
         if geojson_data:
-            color = 'green' if resultados and resultados.get('salud_general', 0) > 60 else 'red'
+            # Determinar color según salud
+            if resultados and resultados.get('salud_general'):
+                salud = resultados['salud_general']
+                if salud >= 80:
+                    color = 'green'
+                elif salud >= 60:
+                    color = 'orange'
+                elif salud >= 40:
+                    color = 'yellow'
+                else:
+                    color = 'red'
+            else:
+                color = 'blue'
+            
             folium.GeoJson(
                 geojson_data,
                 style_function=lambda x: {
                     'fillColor': color,
                     'color': color,
-                    'weight': 2,
+                    'weight': 3,
                     'fillOpacity': 0.6
                 }
             ).add_to(m)
@@ -176,18 +278,28 @@ def main():
         # Carga de archivos
         st.markdown("---")
         st.markdown("### 📁 Cargar Polígono")
+        
+        # Información sobre formatos
+        st.markdown("""
+        <div class="warning-box">
+        <strong>Formatos aceptados:</strong>
+        <br>• <strong>ZIP</strong> con Shapefile (.shp, .dbf, .shx)
+        <br>• <strong>KML</strong> de Google Earth
+        </div>
+        """, unsafe_allow_html=True)
+        
         archivo = st.file_uploader(
-            "Subir GeoJSON o ZIP",
-            type=['geojson', 'json', 'zip'],
-            help="Archivo GeoJSON o ZIP que contenga el polígono del lote"
+            "Subir archivo ZIP o KML",
+            type=['zip', 'kml'],
+            help="Archivo ZIP con Shapefile o KML de Google Earth"
         )
         
         if archivo:
             with st.spinner("Procesando archivo..."):
-                geojson_data = cargar_geojson(archivo)
+                geojson_data = procesar_archivo_subido(archivo)
                 if geojson_data:
                     st.session_state.geojson_data = geojson_data
-                    st.success("✅ Archivo cargado correctamente")
+                    st.session_state.resultados = None  # Resetear resultados anteriores
         
         # Fechas de análisis
         st.markdown("---")
@@ -200,7 +312,14 @@ def main():
         
         # Botón de análisis
         st.markdown("---")
-        if st.button("🚀 Ejecutar Análisis", type="primary", use_container_width=True):
+        analizar_disabled = st.session_state.geojson_data is None
+        
+        if st.button(
+            "🚀 Ejecutar Análisis", 
+            type="primary", 
+            use_container_width=True,
+            disabled=analizar_disabled
+        ):
             if st.session_state.geojson_data:
                 with st.spinner("Analizando cultivo..."):
                     analizador = AnalizadorCultivos()
@@ -208,7 +327,7 @@ def main():
                         st.session_state.geojson_data, cultivo, fecha_inicio, fecha_fin
                     )
             else:
-                st.error("Primero carga un archivo GeoJSON")
+                st.error("Primero carga un archivo con el polígono del lote")
     
     # Contenido principal
     col1, col2 = st.columns([2, 1])
@@ -219,8 +338,15 @@ def main():
         if st.session_state.geojson_data:
             mapa = crear_mapa(st.session_state.geojson_data, st.session_state.resultados)
             st_folium(mapa, height=500, use_container_width=True)
+            
+            # Información del polígono cargado
+            if st.session_state.geojson_data.get('features'):
+                feature = st.session_state.geojson_data['features'][0]
+                propiedades = feature.get('properties', {})
+                nombre = propiedades.get('name', 'Sin nombre')
+                st.info(f"**Polígono cargado:** {nombre}")
         else:
-            st.info("Carga un archivo GeoJSON para visualizar el mapa")
+            st.info("👆 Carga un archivo ZIP o KML para visualizar el mapa")
     
     with col2:
         st.markdown('<h3 class="section-header">📊 Resultados</h3>', unsafe_allow_html=True)
@@ -250,7 +376,10 @@ def main():
             st.write(f"**Período:** {fecha_inicio} a {fecha_fin}")
             
         else:
-            st.info("Ejecuta el análisis para ver los resultados")
+            if st.session_state.geojson_data:
+                st.info("👆 Ejecuta el análisis para ver los resultados")
+            else:
+                st.info("💡 Carga un archivo y ejecuta el análisis para ver los resultados aquí")
 
 if __name__ == "__main__":
     main()
