@@ -1,27 +1,21 @@
-# Analizador Multi-Cultivo - Sentinel-2 + ESRI
+# Analizador de Fertilidad con Mapas Interactivos
 
-Análisis de fertilidad NPK por zonas usando imágenes reales **Sentinel-2 (10m)** y mapas base **ESRI World Imagery**.
+## Descripción
+Sistema de análisis de fertilidad de suelos para cultivos (Trigo, Maíz, Soja, Sorgo, Girasol) con visualización en mapas interactivos usando capas base de ESRI.
 
 ## Características
+- Análisis de fertilidad para múltiples cultivos
+- Visualización interactiva en mapas ESRI
+- Múltiples capas base (Satélite, Calles, Topográfico)
+- Exportación de resultados en HTML
+- Tooltips informativos y leyendas
 
-* **API Real Sentinel Hub** (NDVI, NDRE)
-* **Mapas ESRI 50cm/píxel**
-* 5 cultivos: Trigo, Maíz, Soja, Sorgo, Girasol
-* Zonas de manejo: 16 a 48
-* Descarga: CSV + GeoJSON + PDF
-* **Funciona en Streamlit Cloud**
+## Instalación
 
-## Deploy
+### Requisitos
+- Python 3.8+
+- Dependencias listadas en `requirements.txt`
 
-[https://analizador-multi-cultivo-.streamlit.app](https://analizador-multi-cultivo-.streamlit.app)
-
-## Uso
-
-1. Sube un ZIP con shapefile
-2. Selecciona cultivo y fecha
-3. ¡Obtén análisis por zonas!
-
-## Requisitos
-
+### Instalación de dependencias
 ```bash
 pip install -r requirements.txt
