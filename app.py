@@ -382,33 +382,66 @@ def obtener_bbox_desde_geojson(geojson_data):
         st.error(f"❌ Error obteniendo BBox: {str(e)}")
         return None
 
-def obtener_fechas_analisis():
-    """Obtiene fechas para análisis (últimos 30 días)"""
-    fecha_fin = datetime.now()
-    fecha_inicio = fecha_fin - timedelta(days=30)
-    return fecha_inicio.strftime("%Y-%m-%d"), fecha_fin.strftime("%Y-%m-%d")
-
-def crear_mapa_interactivo(geojson_data, resultados, cultivo, key_suffix=""):
-    """Crea un mapa interactivo con los resultados"""
-    
+def limpiar_geojson(geojson_data):
+    """Limpia y valida el GeoJSON para evitar errores en Folium"""
     try:
-        # Determinar centro del mapa desde el GeoJSON
-        if 'features' in geojson_data and len(geojson_data['features']) > 0:
-            feature = geojson_data['features'][0]
-            if 'geometry' in feature and 'coordinates' in feature['geometry']:
-                coords = feature['geometry']['coordinates'][0]
-                lats = [coord[1] for coord in coords]
-                lons = [coord[0] for coord in coords]
-                centro = [np.mean(lats), np.mean(lons)]
-            else:
-                centro = [-34.6037, -58.3816]
-        else:
-            centro = [-34.6037, -58.3816]
+        if not isinstance(geojson_data, dict):
+            st.error("❌ Formato de GeoJSON inválido")
+            return crear_ejemplo_geojson()
         
-        # Crear mapa
+        # Verificar estructura básica
+        if 'type' not in geojson_data or 'features' not in geojson_data:
+            st.error("❌ Estructura GeoJSON inválida")
+            return crear_ejemplo_geojson()
+        
+        # Asegurar que features sea una lista
+        if not isinstance(geojson_data['features'], list):
+            st.error("❌ Features debe ser una lista")
+            return crear_ejemplo_geojson()
+        
+        # Limpiar cada feature
+        features_limpias = []
+        for feature in geojson_data['features']:
+            if not isinstance(feature, dict):
+                continue
+                
+            # Asegurar propiedades
+            if 'properties' not in feature:
+                feature['properties'] = {}
+            
+            # Asegurar geometría
+            if 'geometry' not in feature:
+                continue
+                
+            # Limpiar propiedades (evitar tipos de datos problemáticos)
+            if feature['properties']:
+                propiedades_limpias = {}
+                for key, value in feature['properties'].items():
+                    # Convertir a tipos simples
+                    if isinstance(value, (str, int, float, bool)) or value is None:
+                        propiedades_limpias[str(key)] = value
+                feature['properties'] = propiedades_limpias
+            
+            features_limpias.append(feature)
+        
+        geojson_data['features'] = features_limpias
+        
+        if len(features_limpias) == 0:
+            st.error("❌ No hay features válidas en el GeoJSON")
+            return crear_ejemplo_geojson()
+        
+        return geojson_data
+        
+    except Exception as e:
+        st.error(f"❌ Error limpiando GeoJSON: {str(e)}")
+        return crear_ejemplo_geojson()
+
+def crear_mapa_simple(centro, zoom=10):
+    """Crea un mapa simple sin GeoJSON problemático"""
+    try:
         m = folium.Map(
             location=centro,
-            zoom_start=12,
+            zoom_start=zoom,
             tiles='OpenStreetMap'
         )
         
@@ -427,42 +460,6 @@ def crear_mapa_interactivo(geojson_data, resultados, cultivo, key_suffix=""):
             overlay=False
         ).add_to(m)
         
-        # Estilo según salud del cultivo
-        if resultados:
-            salud = resultados.get('salud_general', 50)
-            if salud >= 80:
-                color = 'green'
-                fill_color = 'green'
-            elif salud >= 60:
-                color = 'yellow'
-                fill_color = 'yellow'
-            elif salud >= 40:
-                color = 'orange'
-                fill_color = 'orange'
-            else:
-                color = 'red'
-                fill_color = 'red'
-        else:
-            color = 'blue'
-            fill_color = 'blue'
-        
-        # Agregar polígono
-        folium.GeoJson(
-            geojson_data,
-            name='Área de Cultivo',
-            style_function=lambda x: {
-                'fillColor': fill_color,
-                'color': color,
-                'weight': 3,
-                'fillOpacity': 0.6,
-            },
-            tooltip=folium.GeoJsonTooltip(
-                fields=['name', 'area_ha', 'cultivo'] if 'features' in geojson_data and geojson_data['features'] and 'properties' in geojson_data['features'][0] else [],
-                aliases=['Nombre:', 'Área (ha):', 'Cultivo:'],
-                style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
-            )
-        ).add_to(m)
-        
         # Agregar plugins
         plugins.Fullscreen().add_to(m)
         plugins.MeasureControl().add_to(m)
@@ -473,8 +470,91 @@ def crear_mapa_interactivo(geojson_data, resultados, cultivo, key_suffix=""):
         return m
         
     except Exception as e:
-        st.error(f"❌ Error creando el mapa: {str(e)}")
+        st.error(f"❌ Error creando mapa base: {str(e)}")
+        # Mapa de respaldo mínimo
         return folium.Map(location=[-34.6037, -58.3816], zoom_start=4)
+
+def crear_mapa_interactivo(geojson_data, resultados, cultivo, key_suffix=""):
+    """Crea un mapa interactivo con los resultados"""
+    
+    try:
+        # Determinar centro del mapa
+        centro = [-34.6037, -58.3816]  # Por defecto
+        
+        if geojson_data and 'features' in geojson_data and len(geojson_data['features']) > 0:
+            try:
+                feature = geojson_data['features'][0]
+                if 'geometry' in feature and 'coordinates' in feature['geometry']:
+                    coords = feature['geometry']['coordinates'][0]
+                    if len(coords) > 0:
+                        lats = [coord[1] for coord in coords if len(coord) >= 2]
+                        lons = [coord[0] for coord in coords if len(coord) >= 2]
+                        if lats and lons:
+                            centro = [np.mean(lats), np.mean(lons)]
+            except Exception as e:
+                st.warning(f"⚠️ Usando centro por defecto: {str(e)}")
+        
+        # Crear mapa base
+        m = crear_mapa_simple(centro, 12)
+        
+        # Intentar agregar el polígono si el GeoJSON es válido
+        try:
+            if geojson_data and 'features' in geojson_data and len(geojson_data['features']) > 0:
+                
+                # Estilo según salud del cultivo
+                if resultados:
+                    salud = resultados.get('salud_general', 50)
+                    if salud >= 80:
+                        color = 'green'
+                        fill_color = 'green'
+                    elif salud >= 60:
+                        color = 'yellow'
+                        fill_color = 'yellow'
+                    elif salud >= 40:
+                        color = 'orange'
+                        fill_color = 'orange'
+                    else:
+                        color = 'red'
+                        fill_color = 'red'
+                else:
+                    color = 'blue'
+                    fill_color = 'blue'
+                
+                # Crear tooltip simple
+                tooltip_text = "Área de Cultivo"
+                if (geojson_data['features'][0].get('properties') and 
+                    geojson_data['features'][0]['properties'].get('name')):
+                    tooltip_text = geojson_data['features'][0]['properties']['name']
+                
+                # Agregar polígono con manejo de errores
+                folium.GeoJson(
+                    geojson_data,
+                    name='Área de Cultivo',
+                    style_function=lambda x: {
+                        'fillColor': fill_color,
+                        'color': color,
+                        'weight': 3,
+                        'fillOpacity': 0.6,
+                    }
+                ).add_to(m)
+                
+                # Agregar tooltip simple
+                folium.Marker(
+                    centro,
+                    popup=folium.Popup(tooltip_text, max_width=300),
+                    tooltip=tooltip_text,
+                    icon=folium.DivIcon(html='')  # Icono invisible
+                ).add_to(m)
+                
+        except Exception as e:
+            st.warning(f"⚠️ No se pudo agregar el polígono al mapa: {str(e)}")
+            # Continuar con el mapa base sin el polígono
+        
+        return m
+        
+    except Exception as e:
+        st.error(f"❌ Error crítico creando el mapa: {str(e)}")
+        return crear_mapa_simple([-34.6037, -58.3816], 4)
 
 def main():
     # Header principal
@@ -556,7 +636,9 @@ def main():
                     with st.spinner("🔍 Analizando archivo..."):
                         nuevo_geojson = procesar_archivo_subido(archivo_subido)
                         if nuevo_geojson is not None:
-                            st.session_state.geojson_data = nuevo_geojson
+                            # Limpiar el GeoJSON antes de guardarlo
+                            geojson_limpio = limpiar_geojson(nuevo_geojson)
+                            st.session_state.geojson_data = geojson_limpio
                             st.session_state.map_key += 1
                             st.session_state.archivo_procesado = True
                             st.session_state.resultados = None
@@ -651,12 +733,19 @@ def main():
             key_suffix=str(st.session_state.map_key)
         )
         
-        map_data = st_folium(
-            mapa, 
-            width=400, 
-            height=500,
-            key=f"map_{st.session_state.map_key}"
-        )
+        # Mostrar el mapa con manejo de errores
+        try:
+            map_data = st_folium(
+                mapa, 
+                width=400, 
+                height=500,
+                key=f"map_{st.session_state.map_key}"
+            )
+        except Exception as e:
+            st.error(f"❌ Error mostrando el mapa: {str(e)}")
+            # Mostrar mapa de respaldo
+            mapa_respaldo = crear_mapa_simple([-34.6037, -58.3816], 4)
+            st_folium(mapa_respaldo, width=400, height=500, key="map_respaldo")
     
     with col2:
         st.subheader("📊 Panel de Análisis Sentinel-2")
