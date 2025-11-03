@@ -1,26 +1,37 @@
 # 🌱 Analizador Multi-Cultivo con Sentinel-2
 
-Sistema de análisis de cultivos utilizando imágenes satelitales Sentinel-2 y Sentinel Hub.
+Aplicación web interactiva para análisis de cultivos utilizando Streamlit y simulaciones de datos Sentinel-2.
 
-## 🚀 Características
+## 🚀 Despliegue Rápido en Streamlit Cloud
 
-- **Análisis multi-cultivo** (Trigo, Maíz, Soja, Sorgo, Girasol)
-- **Imágenes Sentinel-2** en tiempo casi real
-- **Índices de vegetación** (NDVI, NDWI)
-- **Mapas interactivos** con capas base ESRI
-- **Evaluación de salud** de cultivos
-- **Recomendaciones automáticas** basadas en análisis
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://analizador-multi-cultivo.streamlit.app/)
 
-## 📋 Prerrequisitos
+### Características Principales
 
-### Credenciales Sentinel Hub
-1. Regístrate en [Sentinel Hub](https://www.sentinel-hub.com/)
-2. Crea una nueva instancia en [Dashboard](https://apps.sentinel-hub.com/dashboard/)
-3. Obtén tu `Client ID` y `Client Secret`
+- **Interfaz Web Moderna** con Streamlit
+- **Análisis Multi-Cultivo** (Trigo, Maíz, Soja, Sorgo, Girasol)
+- **Mapas Interactivos** con Folium y capas ESRI
+- **Métricas de Salud** de cultivos (NDVI, NDWI)
+- **Recomendaciones Automáticas** basadas en análisis
+- **Modo Demo** con datos simulados
 
-### Configuración de credenciales
+## 📋 Uso Rápido
 
-**Opción 1: Variables de entorno**
+1. **Accede a la aplicación** en Streamlit Cloud
+2. **Selecciona un cultivo** en el panel izquierdo
+3. **Configura el análisis** (usa el polígono de ejemplo o sube tu GeoJSON)
+4. **Haz clic en "Ejecutar Análisis"**
+5. **Visualiza los resultados** en el mapa y paneles
+
+## 🛠️ Ejecución Local
+
 ```bash
-export SENTINELHUB_CLIENT_ID="tu_client_id"
-export SENTINELHUB_CLIENT_SECRET="tu_client_secret"
+# Clonar el repositorio
+git clone https://github.com/mawucano-design/analizador-multi-cultivo-.git
+cd analizador-multi-cultivo-
+
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Ejecutar la aplicación
+streamlit run app.py
