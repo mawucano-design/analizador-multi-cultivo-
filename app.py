@@ -30,6 +30,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Credenciales automáticas de Sentinel Hub
+SENTINEL_CLIENT_ID = "b296cf70-c9d2-4e69-91f4-f7be80b99ed1"
+SENTINEL_CLIENT_SECRET = "358474d6-2326-4637-bf8e-30a709b2d6a6"
+
 # Configuración de cultivos
 CULTIVOS = {
     "trigo": {
@@ -73,19 +77,18 @@ class SentinelAnalizador:
         self.config.save()
     
     def obtener_imagen_sentinel2(self, bbox, fecha_inicio, fecha_fin, tamaño=(512, 512)):
-        """Obtiene imagen Sentinel-2 L2A (harmonizada) para el área y fecha especificadas"""
+        """Obtiene imagen Sentinel-2 L2A para el área y fecha especificadas"""
         
-        # Evalscript para NDVI, NDWI y bandas naturales
         evalscript = """
         //VERSION=3
         function setup() {
             return {
                 input: [{
-                    bands: ["B02", "B03", "B04", "B08", "B11"],
+                    bands: ["B02", "B03", "B04", "B08"],
                     units: "REFLECTANCE"
                 }],
                 output: {
-                    bands: 6,
+                    bands: 4,
                     sampleType: "FLOAT32"
                 }
             };
@@ -98,23 +101,19 @@ class SentinelAnalizador:
             // Calcular NDWI
             let ndwi = (sample.B03 - sample.B08) / (sample.B03 + sample.B08);
             
-            // Calcular NDBI (Índice de Área Construida)
-            let ndbi = (sample.B11 - sample.B08) / (sample.B11 + sample.B08);
-            
             // Retornar RGB + índices
-            return [sample.B04, sample.B03, sample.B02, ndvi, ndwi, ndbi];
+            return [sample.B04, sample.B03, sample.B02, ndvi];
         }
         """
         
         try:
-            # Usar Sentinel-2 L2A (nivel 2A - corrección atmosférica aplicada)
             request = SentinelHubRequest(
                 evalscript=evalscript,
                 input_data=[
                     SentinelHubRequest.input_data(
                         data_collection=DataCollection.SENTINEL2_L2A,
                         time_interval=(fecha_inicio, fecha_fin),
-                        mosaicking_order=MosaickingOrder.LEAST_CC,  # Menor cobertura de nubes
+                        mosaicking_order=MosaickingOrder.LEAST_CC,
                     )
                 ],
                 responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
@@ -123,67 +122,61 @@ class SentinelAnalizador:
                 config=self.config,
             )
             
-            # Ejecutar request
             datos = request.get_data()
             return datos[0] if datos else None
             
         except Exception as e:
-            st.error(f"❌ Error obteniendo imagen Sentinel-2 L2A: {str(e)}")
+            st.error(f"❌ Error obteniendo imagen Sentinel-2: {str(e)}")
             return None
     
     def calcular_indices(self, imagen):
-        """Calcula índices de vegetación a partir de la imagen Sentinel-2"""
+        """Calcula índices de vegetación"""
         if imagen is None:
             return None
             
         try:
-            # La imagen tiene [R, G, B, NDVI, NDWI, NDBI]
+            # La imagen tiene [R, G, B, NDVI]
             ndvi = imagen[:, :, 3]
-            ndwi = imagen[:, :, 4]
-            ndbi = imagen[:, :, 5]
             
-            # Limpiar valores inválidos
-            ndvi = np.nan_to_num(ndvi, nan=0.0, posinf=1.0, neginf=-1.0)
-            ndwi = np.nan_to_num(ndwi, nan=0.0, posinf=1.0, neginf=-1.0)
-            ndbi = np.nan_to_num(ndbi, nan=0.0, posinf=1.0, neginf=-1.0)
+            # Calcular NDWI
+            verde = imagen[:, :, 1]
+            nir = imagen[:, :, 3]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ndwi = (verde - nir) / (verde + nir)
+                ndwi = np.nan_to_num(ndwi, nan=0.0, posinf=1.0, neginf=-1.0)
             
             return {
                 'ndvi': ndvi,
                 'ndwi': ndwi,
-                'ndbi': ndbi,
-                'rgb': imagen[:, :, :3]  # Bandas RGB naturales
+                'rgb': imagen[:, :, :3]
             }
         except Exception as e:
             st.error(f"❌ Error calculando índices: {str(e)}")
             return None
     
     def analizar_salud_cultivo(self, indices, cultivo):
-        """Analiza la salud del cultivo basado en los índices Sentinel-2"""
+        """Analiza la salud del cultivo"""
         if indices is None:
             return None
             
         try:
             ndvi = indices['ndvi']
             ndwi = indices['ndwi']
-            ndbi = indices['ndbi']
             
-            # Filtrar píxeles válidos (excluir nubes, agua, etc.)
+            # Filtrar píxeles válidos
             mascara_valida = (ndvi > -1) & (ndvi < 1) & (ndwi > -1) & (ndwi < 1)
             ndvi_filtrado = ndvi[mascara_valida]
             ndwi_filtrado = ndwi[mascara_valida]
             
             if len(ndvi_filtrado) == 0:
-                st.warning("⚠️ No se encontraron píxeles válidos para análisis")
                 return None
             
-            # Estadísticas básicas
+            # Estadísticas
             stats_ndvi = {
                 'media': float(np.nanmean(ndvi_filtrado)),
                 'max': float(np.nanmax(ndvi_filtrado)),
                 'min': float(np.nanmin(ndvi_filtrado)),
-                'std': float(np.nanstd(ndvi_filtrado)),
-                'percentil_25': float(np.nanpercentile(ndvi_filtrado, 25)),
-                'percentil_75': float(np.nanpercentile(ndvi_filtrado, 75))
+                'std': float(np.nanstd(ndvi_filtrado))
             }
             
             stats_ndwi = {
@@ -193,26 +186,15 @@ class SentinelAnalizador:
                 'std': float(np.nanstd(ndwi_filtrado))
             }
             
-            # Evaluar salud según rangos óptimos del cultivo
+            # Evaluar salud
             cultivo_info = CULTIVOS[cultivo]
             ndvi_optimo = cultivo_info['ndvi_optimo']
             ndwi_optimo = cultivo_info['ndwi_optimo']
             
-            # Calcular porcentaje de píxeles en rango óptimo
             ndvi_en_rango = np.sum((ndvi_filtrado >= ndvi_optimo[0]) & (ndvi_filtrado <= ndvi_optimo[1])) / len(ndvi_filtrado)
             ndwi_en_rango = np.sum((ndwi_filtrado >= ndwi_optimo[0]) & (ndwi_filtrado <= ndwi_optimo[1])) / len(ndwi_filtrado)
             
-            # Salud general (promedio ponderado)
             salud_general = (ndvi_en_rango * 0.7 + ndwi_en_rango * 0.3) * 100
-            
-            # Detección de posibles problemas
-            problemas = []
-            if stats_ndvi['media'] < ndvi_optimo[0]:
-                problemas.append("NDVI bajo - posible estrés hídrico o nutricional")
-            if stats_ndwi['media'] < ndwi_optimo[0]:
-                problemas.append("NDWI bajo - posible falta de humedad")
-            if np.mean(ndbi) > 0.1:  # Umbral para áreas construidas
-                problemas.append("Presencia de áreas no agrícolas detectada")
             
             return {
                 'salud_general': salud_general,
@@ -220,18 +202,17 @@ class SentinelAnalizador:
                 'ndwi_stats': stats_ndwi,
                 'ndvi_en_rango': ndvi_en_rango * 100,
                 'ndwi_en_rango': ndwi_en_rango * 100,
-                'problemas': problemas,
                 'pixeles_analizados': len(ndvi_filtrado),
                 'fecha_analisis': datetime.now().isoformat()
             }
             
         except Exception as e:
-            st.error(f"❌ Error analizando salud del cultivo: {str(e)}")
+            st.error(f"❌ Error analizando salud: {str(e)}")
             return None
 
 def crear_ejemplo_geojson():
-    """Crea un archivo GeoJSON de ejemplo en zona agrícola"""
-    ejemplo_geojson = {
+    """Crea un archivo GeoJSON de ejemplo"""
+    return {
         "type": "FeatureCollection",
         "features": [
             {
@@ -254,311 +235,151 @@ def crear_ejemplo_geojson():
             }
         ]
     }
-    return ejemplo_geojson
 
 def procesar_archivo_subido(archivo):
-    """Procesa archivos GeoJSON, Shapefile (ZIP) u otros formatos geoespaciales"""
+    """Procesa archivos geoespaciales"""
     try:
-        # Leer el contenido del archivo en memoria
-        contenido = archivo.read()
-        
-        # Intentar como GeoJSON primero
         if archivo.name.lower().endswith(('.geojson', '.json')):
-            try:
-                archivo.seek(0)  # Volver al inicio del archivo
-                geojson_data = json.load(archivo)
-                st.success("✅ Archivo GeoJSON procesado correctamente")
-                return geojson_data
-            except json.JSONDecodeError:
-                st.error("❌ El archivo no es un GeoJSON válido")
-                return None
-        
-        # Procesar archivo ZIP (posible Shapefile u otros)
+            archivo.seek(0)
+            return json.load(archivo)
         elif archivo.name.lower().endswith('.zip'):
-            return procesar_archivo_zip(contenido, archivo.name)
-        
+            return procesar_archivo_zip(archivo.read(), archivo.name)
         else:
-            st.error("❌ Formato de archivo no soportado")
+            st.error("❌ Formato no soportado")
             return None
-            
     except Exception as e:
         st.error(f"❌ Error procesando archivo: {str(e)}")
         return None
 
 def procesar_archivo_zip(contenido_zip, nombre_archivo):
-    """Procesa archivos ZIP que pueden contener Shapefiles, GeoJSON, etc."""
+    """Procesa archivos ZIP"""
     try:
         with zipfile.ZipFile(io.BytesIO(contenido_zip), 'r') as zip_ref:
-            # Listar todos los archivos en el ZIP
             archivos = zip_ref.namelist()
-            st.info(f"📁 Archivos en el ZIP: {', '.join(archivos)}")
             
-            # Buscar Shapefiles (.shp, .dbf, .shx, .prj)
+            # Buscar Shapefile
             shp_files = [f for f in archivos if f.lower().endswith('.shp')]
             if shp_files:
-                return procesar_shapefile_desde_zip(zip_ref, shp_files[0])
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    for file in zip_ref.namelist():
+                        if file.startswith(os.path.splitext(shp_files[0])[0]):
+                            zip_ref.extract(file, temp_dir)
+                    shp_path = os.path.join(temp_dir, shp_files[0])
+                    gdf = gpd.read_file(shp_path)
+                    return json.loads(gdf.to_json())
             
             # Buscar GeoJSON
             geojson_files = [f for f in archivos if f.lower().endswith(('.geojson', '.json'))]
             if geojson_files:
-                return procesar_geojson_desde_zip(zip_ref, geojson_files[0])
+                with zip_ref.open(geojson_files[0]) as f:
+                    return json.load(f)
             
-            # Buscar KML
-            kml_files = [f for f in archivos if f.lower().endswith('.kml')]
-            if kml_files:
-                return procesar_kml_desde_zip(zip_ref, kml_files[0])
-            
-            st.error("❌ No se encontraron archivos geoespaciales en el ZIP")
+            st.error("❌ No se encontraron archivos geoespaciales")
             return None
-            
     except Exception as e:
         st.error(f"❌ Error procesando ZIP: {str(e)}")
         return None
 
-def procesar_shapefile_desde_zip(zip_ref, shp_file):
-    """Procesa Shapefile desde archivo ZIP"""
-    try:
-        # Crear directorio temporal
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Extraer todos los archivos del shapefile
-            for file in zip_ref.namelist():
-                if file.startswith(os.path.splitext(shp_file)[0]):
-                    zip_ref.extract(file, temp_dir)
-            
-            # Leer el shapefile con geopandas
-            shp_path = os.path.join(temp_dir, shp_file)
-            gdf = gpd.read_file(shp_path)
-            
-            # Convertir a GeoJSON
-            geojson_data = json.loads(gdf.to_json())
-            
-            st.success(f"✅ Shapefile procesado: {len(gdf)} features encontrados")
-            return geojson_data
-            
-    except Exception as e:
-        st.error(f"❌ Error procesando Shapefile: {str(e)}")
-        return None
-
-def procesar_geojson_desde_zip(zip_ref, geojson_file):
-    """Procesa GeoJSON desde archivo ZIP"""
-    try:
-        with zip_ref.open(geojson_file) as f:
-            geojson_data = json.load(f)
-            st.success(f"✅ GeoJSON procesado: {geojson_file}")
-            return geojson_data
-    except Exception as e:
-        st.error(f"❌ Error procesando GeoJSON {geojson_file}: {str(e)}")
-        return None
-
-def procesar_kml_desde_zip(zip_ref, kml_file):
-    """Procesa KML desde archivo ZIP"""
-    try:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Extraer KML
-            kml_path = os.path.join(temp_dir, kml_file)
-            zip_ref.extract(kml_file, temp_dir)
-            
-            # Leer KML con geopandas
-            gdf = gpd.read_file(kml_path, driver='KML')
-            
-            # Convertir a GeoJSON
-            geojson_data = json.loads(gdf.to_json())
-            
-            st.success(f"✅ KML procesado: {len(gdf)} features encontrados")
-            return geojson_data
-            
-    except Exception as e:
-        st.error(f"❌ Error procesando KML: {str(e)}")
-        return None
-
 def obtener_bbox_desde_geojson(geojson_data):
-    """Obtiene el BBox desde datos GeoJSON"""
+    """Obtiene el BBox desde GeoJSON"""
     try:
         gdf = gpd.GeoDataFrame.from_features(geojson_data["features"])
         bounds = gdf.total_bounds
-        bbox = BBox(bbox=[bounds[0], bounds[1], bounds[2], bounds[3]], crs=CRS.WGS84)
-        return bbox
+        return BBox(bbox=[bounds[0], bounds[1], bounds[2], bounds[3]], crs=CRS.WGS84)
     except Exception as e:
         st.error(f"❌ Error obteniendo BBox: {str(e)}")
         return None
 
-def limpiar_geojson(geojson_data):
-    """Limpia y valida el GeoJSON para evitar errores en Folium"""
+def crear_mapa_simple(geojson_data, resultados=None):
+    """Crea un mapa simple y robusto"""
     try:
-        if not isinstance(geojson_data, dict):
-            st.error("❌ Formato de GeoJSON inválido")
-            return crear_ejemplo_geojson()
+        # Centro por defecto
+        centro = [-34.6037, -58.3816]
         
-        # Verificar estructura básica
-        if 'type' not in geojson_data or 'features' not in geojson_data:
-            st.error("❌ Estructura GeoJSON inválida")
-            return crear_ejemplo_geojson()
+        # Intentar calcular centro desde GeoJSON
+        if geojson_data and 'features' in geojson_data and geojson_data['features']:
+            try:
+                feature = geojson_data['features'][0]
+                if 'geometry' in feature and 'coordinates' in feature['geometry']:
+                    coords = feature['geometry']['coordinates'][0]
+                    lats = [coord[1] for coord in coords]
+                    lons = [coord[0] for coord in coords]
+                    centro = [np.mean(lats), np.mean(lons)]
+            except:
+                pass
         
-        # Asegurar que features sea una lista
-        if not isinstance(geojson_data['features'], list):
-            st.error("❌ Features debe ser una lista")
-            return crear_ejemplo_geojson()
+        # Crear mapa base
+        m = folium.Map(location=centro, zoom_start=12)
         
-        # Limpiar cada feature
-        features_limpias = []
-        for feature in geojson_data['features']:
-            if not isinstance(feature, dict):
-                continue
-                
-            # Asegurar propiedades
-            if 'properties' not in feature:
-                feature['properties'] = {}
-            
-            # Asegurar geometría
-            if 'geometry' not in feature:
-                continue
-                
-            # Limpiar propiedades (evitar tipos de datos problemáticos)
-            if feature['properties']:
-                propiedades_limpias = {}
-                for key, value in feature['properties'].items():
-                    # Convertir a tipos simples
-                    if isinstance(value, (str, int, float, bool)) or value is None:
-                        propiedades_limpias[str(key)] = value
-                feature['properties'] = propiedades_limpias
-            
-            features_limpias.append(feature)
-        
-        geojson_data['features'] = features_limpias
-        
-        if len(features_limpias) == 0:
-            st.error("❌ No hay features válidas en el GeoJSON")
-            return crear_ejemplo_geojson()
-        
-        return geojson_data
-        
-    except Exception as e:
-        st.error(f"❌ Error limpiando GeoJSON: {str(e)}")
-        return crear_ejemplo_geojson()
-
-def crear_mapa_simple(centro, zoom=10):
-    """Crea un mapa simple sin GeoJSON problemático"""
-    try:
-        m = folium.Map(
-            location=centro,
-            zoom_start=zoom,
-            tiles='OpenStreetMap'
-        )
-        
-        # Agregar capas base ESRI
+        # Agregar capas base
         folium.TileLayer(
             tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
             attr='Esri',
-            name='Esri Satélite',
-            overlay=False
+            name='Esri Satélite'
         ).add_to(m)
         
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-            attr='Esri',
-            name='Esri Calles',
-            overlay=False
-        ).add_to(m)
+        # Agregar polígono si existe
+        if geojson_data and 'features' in geojson_data:
+            # Determinar color según resultados
+            color = 'blue'
+            if resultados:
+                salud = resultados.get('salud_general', 50)
+                if salud >= 80: color = 'green'
+                elif salud >= 60: color = 'yellow'
+                elif salud >= 40: color = 'orange'
+                else: color = 'red'
+            
+            folium.GeoJson(
+                geojson_data,
+                style_function=lambda x: {
+                    'fillColor': color,
+                    'color': color,
+                    'weight': 2,
+                    'fillOpacity': 0.5,
+                }
+            ).add_to(m)
         
-        # Agregar plugins
+        # Controles básicos
         plugins.Fullscreen().add_to(m)
-        plugins.MeasureControl().add_to(m)
-        
-        # Control de capas
         folium.LayerControl().add_to(m)
         
         return m
         
     except Exception as e:
-        st.error(f"❌ Error creando mapa base: {str(e)}")
-        # Mapa de respaldo mínimo
+        st.error(f"❌ Error creando mapa: {str(e)}")
         return folium.Map(location=[-34.6037, -58.3816], zoom_start=4)
 
-def crear_mapa_interactivo(geojson_data, resultados, cultivo, key_suffix=""):
-    """Crea un mapa interactivo con los resultados"""
-    
+def exportar_geojson(geojson_data, resultados, cultivo):
+    """Exporta GeoJSON con resultados del análisis"""
     try:
-        # Determinar centro del mapa
-        centro = [-34.6037, -58.3816]  # Por defecto
+        if not geojson_data or not resultados:
+            return None
+            
+        # Crear copia del GeoJSON
+        geojson_export = json.loads(json.dumps(geojson_data))
         
-        if geojson_data and 'features' in geojson_data and len(geojson_data['features']) > 0:
-            try:
-                feature = geojson_data['features'][0]
-                if 'geometry' in feature and 'coordinates' in feature['geometry']:
-                    coords = feature['geometry']['coordinates'][0]
-                    if len(coords) > 0:
-                        lats = [coord[1] for coord in coords if len(coord) >= 2]
-                        lons = [coord[0] for coord in coords if len(coord) >= 2]
-                        if lats and lons:
-                            centro = [np.mean(lats), np.mean(lons)]
-            except Exception as e:
-                st.warning(f"⚠️ Usando centro por defecto: {str(e)}")
+        # Agregar resultados a las propiedades
+        for feature in geojson_export['features']:
+            if 'properties' not in feature:
+                feature['properties'] = {}
+            
+            feature['properties'].update({
+                'cultivo_analizado': CULTIVOS[cultivo]['nombre'],
+                'salud_general': resultados['salud_general'],
+                'ndvi_media': resultados['ndvi_stats']['media'],
+                'ndwi_media': resultados['ndwi_stats']['media'],
+                'fecha_analisis': resultados['fecha_analisis'],
+                'pixeles_analizados': resultados['pixeles_analizados']
+            })
         
-        # Crear mapa base
-        m = crear_mapa_simple(centro, 12)
-        
-        # Intentar agregar el polígono si el GeoJSON es válido
-        try:
-            if geojson_data and 'features' in geojson_data and len(geojson_data['features']) > 0:
-                
-                # Estilo según salud del cultivo
-                if resultados:
-                    salud = resultados.get('salud_general', 50)
-                    if salud >= 80:
-                        color = 'green'
-                        fill_color = 'green'
-                    elif salud >= 60:
-                        color = 'yellow'
-                        fill_color = 'yellow'
-                    elif salud >= 40:
-                        color = 'orange'
-                        fill_color = 'orange'
-                    else:
-                        color = 'red'
-                        fill_color = 'red'
-                else:
-                    color = 'blue'
-                    fill_color = 'blue'
-                
-                # Crear tooltip simple
-                tooltip_text = "Área de Cultivo"
-                if (geojson_data['features'][0].get('properties') and 
-                    geojson_data['features'][0]['properties'].get('name')):
-                    tooltip_text = geojson_data['features'][0]['properties']['name']
-                
-                # Agregar polígono con manejo de errores
-                folium.GeoJson(
-                    geojson_data,
-                    name='Área de Cultivo',
-                    style_function=lambda x: {
-                        'fillColor': fill_color,
-                        'color': color,
-                        'weight': 3,
-                        'fillOpacity': 0.6,
-                    }
-                ).add_to(m)
-                
-                # Agregar tooltip simple
-                folium.Marker(
-                    centro,
-                    popup=folium.Popup(tooltip_text, max_width=300),
-                    tooltip=tooltip_text,
-                    icon=folium.DivIcon(html='')  # Icono invisible
-                ).add_to(m)
-                
-        except Exception as e:
-            st.warning(f"⚠️ No se pudo agregar el polígono al mapa: {str(e)}")
-            # Continuar con el mapa base sin el polígono
-        
-        return m
-        
+        return geojson_export
     except Exception as e:
-        st.error(f"❌ Error crítico creando el mapa: {str(e)}")
-        return crear_mapa_simple([-34.6037, -58.3816], 4)
+        st.error(f"❌ Error exportando GeoJSON: {str(e)}")
+        return None
 
 def main():
     # Header principal
-    st.title("🌱 Analizador Multi-Cultivo con Sentinel-2 L2A")
+    st.title("🌱 Analizador Multi-Cultivo con Sentinel-2")
     st.markdown("---")
     
     # Inicializar estado de sesión
@@ -568,35 +389,15 @@ def main():
         st.session_state.resultados = None
     if 'map_key' not in st.session_state:
         st.session_state.map_key = 0
-    if 'archivo_procesado' not in st.session_state:
-        st.session_state.archivo_procesado = False
-    
-    # Sidebar para configuración
+
+    # Sidebar
     with st.sidebar:
-        st.header("⚙️ Configuración Sentinel Hub")
+        st.header("⚙️ Configuración")
         
-        # Credenciales de Sentinel Hub
-        st.info("""
-        **Credenciales Requeridas**
-        Para usar imágenes reales de Sentinel-2 L2A
-        """)
-        
-        client_id = st.text_input(
-            "Client ID", 
-            value="b296cf70-c9d2-4e69-91f4-f7be80b99ed1",
-            type="password",
-            help="Tu Client ID de Sentinel Hub"
-        )
-        
-        client_secret = st.text_input(
-            "Client Secret", 
-            type="password",
-            placeholder="Ingresa tu Client Secret",
-            help="Tu Client Secret de Sentinel Hub"
-        )
+        # Credenciales automáticas
+        st.success("✅ Credenciales Sentinel Hub configuradas automáticamente")
         
         # Selección de cultivo
-        st.subheader("🌱 Cultivo")
         cultivo = st.selectbox(
             "Selecciona el cultivo:",
             options=list(CULTIVOS.keys()),
@@ -604,7 +405,6 @@ def main():
             key="cultivo_select"
         )
         
-        # Información del cultivo seleccionado
         cultivo_info = CULTIVOS[cultivo]
         st.info(f"""
         **Cultivo:** {cultivo_info['nombre']}
@@ -612,254 +412,168 @@ def main():
         **NDWI Óptimo:** {cultivo_info['ndwi_optimo'][0]} - {cultivo_info['ndwi_optimo'][1]}
         """)
         
-        # Opciones de análisis
+        # Datos de entrada
         st.subheader("📁 Datos de Entrada")
         usar_ejemplo = st.checkbox("Usar polígono de ejemplo", value=True, key="usar_ejemplo")
         
         if not usar_ejemplo:
-            st.info("""
-            **Formatos soportados:**
-            - 🔹 GeoJSON (.geojson, .json)
-            - 🔹 Shapefile (.zip con .shp, .dbf, .shx)
-            - 🔹 KML (.kml, .zip con .kml)
-            """)
-            
             archivo_subido = st.file_uploader(
                 "Subir archivo geoespacial",
-                type=['geojson', 'json', 'zip', 'kml'],
-                help="Sube Shapefile (ZIP), GeoJSON o KML con polígonos de tu campo",
-                key="file_uploader"
+                type=['geojson', 'json', 'zip'],
+                help="GeoJSON, JSON o ZIP con Shapefile"
             )
             
             if archivo_subido is not None:
-                if not st.session_state.archivo_procesado or st.button("Reprocesar archivo"):
-                    with st.spinner("🔍 Analizando archivo..."):
-                        nuevo_geojson = procesar_archivo_subido(archivo_subido)
-                        if nuevo_geojson is not None:
-                            # Limpiar el GeoJSON antes de guardarlo
-                            geojson_limpio = limpiar_geojson(nuevo_geojson)
-                            st.session_state.geojson_data = geojson_limpio
-                            st.session_state.map_key += 1
-                            st.session_state.archivo_procesado = True
-                            st.session_state.resultados = None
-                            st.rerun()
+                with st.spinner("Procesando archivo..."):
+                    nuevo_geojson = procesar_archivo_subido(archivo_subido)
+                    if nuevo_geojson is not None:
+                        st.session_state.geojson_data = nuevo_geojson
+                        st.session_state.map_key += 1
+                        st.session_state.resultados = None
+                        st.rerun()
         
-        # Configuración de fechas
+        # Período de análisis
         st.subheader("📅 Período de Análisis")
-        col_fecha1, col_fecha2 = st.columns(2)
-        with col_fecha1:
+        col1, col2 = st.columns(2)
+        with col1:
             fecha_inicio = st.date_input(
                 "Fecha inicio",
-                value=datetime.now() - timedelta(days=30),
-                max_value=datetime.now()
+                value=datetime.now() - timedelta(days=30)
             )
-        with col_fecha2:
-            fecha_fin = st.date_input(
-                "Fecha fin", 
-                value=datetime.now(),
-                max_value=datetime.now()
-            )
+        with col2:
+            fecha_fin = st.date_input("Fecha fin", value=datetime.now())
         
         # Botón de análisis
-        analizar = st.button("🚀 Ejecutar Análisis con Sentinel-2", type="primary", use_container_width=True, key="analizar_btn")
-        
-        if analizar:
-            if not client_id or not client_secret:
-                st.error("❌ Se requieren Client ID y Client Secret de Sentinel Hub")
-            else:
-                with st.spinner("🛰️ Conectando con Sentinel Hub..."):
-                    try:
-                        # Inicializar analizador Sentinel
-                        analizador = SentinelAnalizador(client_id, client_secret)
-                        
-                        # Obtener BBox del polígono
-                        bbox = obtener_bbox_desde_geojson(st.session_state.geojson_data)
-                        if bbox is None:
-                            st.error("❌ No se pudo obtener el área de análisis")
-                            return
-                        
-                        # Obtener imagen Sentinel-2 L2A
-                        fecha_inicio_str = fecha_inicio.strftime("%Y-%m-%d")
-                        fecha_fin_str = fecha_fin.strftime("%Y-%m-%d")
-                        
-                        st.info(f"📡 Solicitando imágenes del {fecha_inicio_str} al {fecha_fin_str}")
-                        
-                        imagen = analizador.obtener_imagen_sentinel2(bbox, fecha_inicio_str, fecha_fin_str)
-                        
-                        if imagen is None:
-                            st.error("❌ No se pudo obtener imagen Sentinel-2")
-                            return
-                        
-                        st.success("✅ Imagen Sentinel-2 L2A obtenida")
-                        
-                        # Calcular índices
-                        indices = analizador.calcular_indices(imagen)
-                        if indices is None:
-                            st.error("❌ Error calculando índices de vegetación")
-                            return
-                        
-                        # Analizar salud del cultivo
+        if st.button("🚀 Ejecutar Análisis con Sentinel-2", type="primary", use_container_width=True):
+            with st.spinner("🛰️ Analizando con Sentinel-2..."):
+                try:
+                    # Inicializar analizador con credenciales automáticas
+                    analizador = SentinelAnalizador(SENTINEL_CLIENT_ID, SENTINEL_CLIENT_SECRET)
+                    
+                    # Obtener BBox
+                    bbox = obtener_bbox_desde_geojson(st.session_state.geojson_data)
+                    if not bbox:
+                        st.error("❌ Error en el área de análisis")
+                        return
+                    
+                    # Obtener imagen
+                    imagen = analizador.obtener_imagen_sentinel2(
+                        bbox, 
+                        fecha_inicio.strftime("%Y-%m-%d"), 
+                        fecha_fin.strftime("%Y-%m-%d")
+                    )
+                    
+                    if imagen is None:
+                        st.error("❌ No se pudo obtener imagen Sentinel-2")
+                        return
+                    
+                    # Calcular índices y analizar
+                    indices = analizador.calcular_indices(imagen)
+                    if indices:
                         st.session_state.resultados = analizador.analizar_salud_cultivo(indices, cultivo)
                         st.session_state.map_key += 1
                         st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error en el análisis: {str(e)}")
-    
+                    
+                except Exception as e:
+                    st.error(f"❌ Error en el análisis: {str(e)}")
+
     # Contenido principal
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.subheader("🗺️ Mapa del Área")
         
-        # Mostrar información del área
-        if (st.session_state.geojson_data and 
-            'features' in st.session_state.geojson_data and 
-            len(st.session_state.geojson_data['features']) > 0 and
-            'properties' in st.session_state.geojson_data['features'][0]):
-            
-            propiedades = st.session_state.geojson_data['features'][0]['properties']
-            nombre_campo = propiedades.get('name', 'Polígono sin nombre')
-            area_ha = propiedades.get('area_ha', 'N/A')
-            st.info(f"📍 **Área:** {nombre_campo} | **Superficie:** {area_ha} ha")
-        else:
-            st.info("📍 **Área:** Polígono cargado")
+        # Información del área
+        if st.session_state.geojson_data and st.session_state.geojson_data.get('features'):
+            props = st.session_state.geojson_data['features'][0].get('properties', {})
+            nombre = props.get('name', 'Polígono cargado')
+            st.info(f"📍 **Área:** {nombre}")
         
-        # Crear y mostrar mapa
-        mapa = crear_mapa_interactivo(
-            st.session_state.geojson_data, 
-            st.session_state.resultados, 
-            cultivo,
-            key_suffix=str(st.session_state.map_key)
-        )
+        # Mostrar mapa
+        mapa = crear_mapa_simple(st.session_state.geojson_data, st.session_state.resultados)
+        st_folium(mapa, width=400, height=500, key=f"map_{st.session_state.map_key}")
         
-        # Mostrar el mapa con manejo de errores
-        try:
-            map_data = st_folium(
-                mapa, 
-                width=400, 
-                height=500,
-                key=f"map_{st.session_state.map_key}"
+        # Botón de exportación
+        if st.session_state.resultados:
+            geojson_export = exportar_geojson(
+                st.session_state.geojson_data, 
+                st.session_state.resultados, 
+                cultivo
             )
-        except Exception as e:
-            st.error(f"❌ Error mostrando el mapa: {str(e)}")
-            # Mostrar mapa de respaldo
-            mapa_respaldo = crear_mapa_simple([-34.6037, -58.3816], 4)
-            st_folium(mapa_respaldo, width=400, height=500, key="map_respaldo")
+            
+            if geojson_export:
+                # Convertir a string para descarga
+                geojson_str = json.dumps(geojson_export, indent=2)
+                
+                st.download_button(
+                    label="📥 Exportar GeoJSON con Resultados",
+                    data=geojson_str,
+                    file_name=f"analisis_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}.geojson",
+                    mime="application/json",
+                    type="primary",
+                    use_container_width=True
+                )
     
     with col2:
-        st.subheader("📊 Panel de Análisis Sentinel-2")
+        st.subheader("📊 Resultados del Análisis")
         
         if st.session_state.resultados:
             resultados = st.session_state.resultados
             
-            st.success("✅ Análisis con Sentinel-2 L2A completado")
+            st.success("✅ Análisis completado con Sentinel-2 L2A")
             
             # Métricas principales
-            col_met1, col_met2, col_met3 = st.columns(3)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("🌱 Salud General", f"{resultados['salud_general']:.1f}%")
+            with col2:
+                st.metric("📈 NDVI Medio", f"{resultados['ndvi_stats']['media']:.3f}")
+            with col3:
+                st.metric("💧 NDWI Medio", f"{resultados['ndwi_stats']['media']:.3f}")
             
-            with col_met1:
-                st.metric(
-                    label="🌱 Salud General",
-                    value=f"{resultados['salud_general']:.1f}%",
-                    delta=None
-                )
-            
-            with col_met2:
-                st.metric(
-                    label="📈 NDVI Medio",
-                    value=f"{resultados['ndvi_stats']['media']:.3f}",
-                    delta=f"±{resultados['ndvi_stats']['std']:.3f}"
-                )
-            
-            with col_met3:
-                st.metric(
-                    label="💧 NDWI Medio", 
-                    value=f"{resultados['ndwi_stats']['media']:.3f}",
-                    delta=f"±{resultados['ndwi_stats']['std']:.3f}"
-                )
-            
-            # Información técnica
-            st.subheader("🔬 Información Técnica")
-            col_tech1, col_tech2 = st.columns(2)
-            
-            with col_tech1:
-                st.write("**NDVI Detallado**")
-                st.write(f"• Rango: {resultados['ndvi_stats']['min']:.3f} - {resultados['ndvi_stats']['max']:.3f}")
-                st.write(f"• Percentil 25: {resultados['ndvi_stats']['percentil_25']:.3f}")
-                st.write(f"• Percentil 75: {resultados['ndvi_stats']['percentil_75']:.3f}")
-                st.write(f"• En rango óptimo: {resultados['ndvi_en_rango']:.1f}%")
-            
-            with col_tech2:
-                st.write("**Estadísticas**")
-                st.write(f"• Píxeles analizados: {resultados['pixeles_analizados']:,}")
-                st.write(f"• NDWI en rango: {resultados['ndwi_en_rango']:.1f}%")
-                st.write(f"• Fecha análisis: {resultados['fecha_analisis'][:19]}")
-            
-            # Problemas detectados
-            if resultados.get('problemas'):
-                st.subheader("⚠️ Alertas Detectadas")
-                for problema in resultados['problemas']:
-                    st.warning(problema)
+            # Detalles
+            st.subheader("🔍 Detalles del Análisis")
+            st.write(f"**Píxeles analizados:** {resultados['pixeles_analizados']:,}")
+            st.write(f"**NDVI en rango óptimo:** {resultados['ndvi_en_rango']:.1f}%")
+            st.write(f"**NDWI en rango óptimo:** {resultados['ndwi_en_rango']:.1f}%")
+            st.write(f"**Fecha de análisis:** {resultados['fecha_analisis'][:19]}")
             
             # Recomendaciones
             st.subheader("💡 Recomendaciones")
             salud = resultados['salud_general']
-            
             if salud >= 80:
-                st.success("""
-                **✅ Excelente Estado**
-                - El cultivo muestra vigor vegetativo óptimo
-                - Continuar con prácticas actuales de manejo
-                - Monitoreo satelital rutinario recomendado
-                """)
+                st.success("**✅ Excelente** - Continuar con manejo actual")
             elif salud >= 60:
-                st.warning("""
-                **🟡 Buen Estado**
-                - Desarrollo vegetativo adecuado
-                - Mantener programa de fertilización
-                - Verificar humedad del suelo
-                """)
+                st.warning("**🟡 Bueno** - Monitorear regularmente")
             elif salud >= 40:
-                st.warning("""
-                **🟠 Estado Regular**
-                - Posible estrés hídrico o nutricional
-                - Evaluar programa de riego
-                - Considerar análisis de suelo
-                """)
+                st.warning("**🟠 Regular** - Revisar fertilización y riego")
             else:
-                st.error("""
-                **🔴 Estado Crítico**
-                - Revisión urgente de manejo agronómico
-                - Consulta técnica recomendada
-                - Evaluar resiembra o cambio de estrategia
-                """)
-        
+                st.error("**🔴 Crítico** - Consulta técnica urgente")
+                
         else:
+            # Estado inicial
             st.info("""
             ## 🛰️ Analizador con Sentinel-2 L2A
             
             **Características:**
-            - 🌱 Análisis multi-cultivo con imágenes reales
-            - 🛰️ **Sentinel-2 L2A** (10m, corrección atmosférica)
-            - 📊 Índices NDVI y NDWI en tiempo real
-            - 🔬 Detección de problemas automática
-            - 💡 Recomendaciones basadas en datos satelitales
+            - 🌱 Análisis multi-cultivo
+            - 🛰️ Imágenes reales Sentinel-2 L2A
+            - 📊 Índices NDVI y NDWI
+            - 📥 Exportación de resultados
             
             **Para comenzar:**
-            1. Configura tus credenciales de Sentinel Hub
-            2. Selecciona el cultivo a analizar
-            3. Carga tu polígono o usa el ejemplo
-            4. Define el período de análisis
-            5. Haz clic en **"Ejecutar Análisis con Sentinel-2"**
+            1. Selecciona el cultivo
+            2. Carga tu polígono (opcional)
+            3. Define el período de análisis  
+            4. Haz clic en **Ejecutar Análisis**
             """)
-    
+
     # Footer
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: gray;'>
-        🌱 Analizador Multi-Cultivo | 🛰️ Sentinel-2 L2A | 📍 Streamlit Cloud
+        🌱 Analizador Multi-Cultivo | 🛰️ Sentinel-2 L2A | Credenciales automáticas
         </div>
         """,
         unsafe_allow_html=True
