@@ -1,37 +1,28 @@
-# Datos temporales
+# Entorno virtual
+venv/
+env/
+.env
+
+# Archivos temporales de Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
 
-# Entornos virtuales
-.env
-.venv
-env/
-venv/
-ENV/
+# Archivos de Streamlit
+.streamlit/
 
-# Archivos de sistema
-.DS_Store
-Thumbs.db
-desktop.ini
+# Archivos SHP de prueba (no commitear datos sensibles)
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
 
-# Archivos de IDE
+# Logs y caches
+*.log
+.cache/
+
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# Datos de usuario
-data/usuario/
-resultados/temp/
-
-# Logs
-*.log
-logs/
-
-# Archivos grandes (opcional)
-# *.html
-# *.geojson
