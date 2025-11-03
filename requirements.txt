@@ -1,12 +1,8 @@
 streamlit>=1.28.0
-folium>=0.15.0
 geopandas>=0.13.0
-pandas>=2.0.0
+folium>=0.15.0
+streamlit-folium>=0.15.0
 numpy>=1.24.0
+pandas>=2.0.0
 shapely>=2.0.0
-matplotlib>=3.7.0
-plotly>=5.13.0
-streamlit-folium>=0.18.0
-pillow>=10.0.0
 fiona>=1.9.0
-sentinelhub>=3.11.0
