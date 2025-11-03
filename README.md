@@ -1,34 +1,20 @@
-# 🌱 Analizador Multi-Cultivo con Sentinel-2
+# 🌱 Analizador Multi-Cultivo
 
-Aplicación web interactiva para análisis de cultivos utilizando Streamlit y simulaciones de datos Sentinel-2.
+Aplicación web para el análisis de cultivos utilizando datos geoespaciales y métricas de vegetación.
 
-## 🚀 Despliegue Rápido en Streamlit Cloud
+## 🚀 Características
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://analizador-multi-cultivo.streamlit.app/)
+- **Análisis multi-cultivo** (Trigo, Maíz, Soja, Sorgo, Girasol)
+- **Visualización interactiva** de lotes agrícolas
+- **Métricas de salud** vegetal (NDVI, biomasa estimada)
+- **Recomendaciones automáticas** basadas en el estado del cultivo
+- **Interfaz intuitiva** y fácil de usar
 
-### Características Principales
-
-- **Interfaz Web Moderna** con Streamlit
-- **Análisis Multi-Cultivo** (Trigo, Maíz, Soja, Sorgo, Girasol)
-- **Mapas Interactivos** con Folium y capas ESRI
-- **Métricas de Salud** de cultivos (NDVI, NDWI)
-- **Recomendaciones Automáticas** basadas en análisis
-- **Modo Demo** con datos simulados
-
-## 📋 Uso Rápido
-
-1. **Accede a la aplicación** en Streamlit Cloud
-2. **Selecciona un cultivo** en el panel izquierdo
-3. **Configura el análisis** (usa el polígono de ejemplo o sube tu GeoJSON)
-4. **Haz clic en "Ejecutar Análisis"**
-5. **Visualiza los resultados** en el mapa y paneles
-
-## 🛠️ Ejecución Local
+## 🛠️ Instalación
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/mawucano-design/analizador-multi-cultivo-.git
-cd analizador-multi-cultivo-
+git clone https://github.com/tu-usuario/analizador-multi-cultivo.git
 
 # Instalar dependencias
 pip install -r requirements.txt
