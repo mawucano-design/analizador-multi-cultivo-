@@ -11,8 +11,8 @@ def configurar_sentinelhub():
     config = SHConfig()
     
     # Obtener credenciales de variables de entorno
-    client_id = os.getenv('SENTINELHUB_CLIENT_ID')
-    client_secret = os.getenv('SENTINELHUB_CLIENT_SECRET')
+    client_id = os.getenv('b296cf70-c9d2-4e69-91f4-f7be80b99ed1')
+    client_secret = os.getenv('358474d6-2326-4637-bf8e-30a709b2d6a6')
     
     if client_id and client_secret:
         config.sh_client_id = client_id
