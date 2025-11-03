@@ -65,39 +65,6 @@ st.markdown("""
         padding-top: 10px;
         padding-bottom: 10px;
     }
-    /* Estilos para leyendas mejoradas */
-    .legend-container {
-        position: fixed; 
-        bottom: 50px; 
-        left: 50px; 
-        width: 220px; 
-        background-color: white; 
-        border: 2px solid grey; 
-        z-index: 9999;
-        font-size: 11px; 
-        padding: 8px; 
-        border-radius: 5px;
-        box-shadow: 0 0 10px rgba(0,0,0,0.2);
-        font-family: Arial, sans-serif;
-    }
-    .legend-title {
-        margin: 0 0 6px 0; 
-        text-align: center;
-        font-weight: bold;
-        font-size: 12px;
-    }
-    .legend-item {
-        margin: 3px 0;
-        display: flex;
-        align-items: center;
-    }
-    .legend-color {
-        width: 14px; 
-        height: 14px; 
-        display: inline-block; 
-        margin-right: 6px; 
-        border: 1px solid #333;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -491,8 +458,86 @@ def procesar_archivo_kml(contenido_kml, nombre_archivo):
         st.error(f"❌ Error procesando KML: {str(e)}")
         return None
 
+def crear_leyenda_fertilidad():
+    """Crea leyenda para mapa de fertilidad"""
+    legend_html = '''
+    <div style="
+        position: fixed; 
+        bottom: 50px; 
+        left: 50px; 
+        width: 200px; 
+        height: auto;
+        background-color: white; 
+        border: 2px solid grey; 
+        z-index: 9999;
+        font-size: 11px;
+        padding: 10px;
+        border-radius: 5px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        font-family: Arial, sans-serif;
+    ">
+        <h4 style="margin: 0 0 8px 0; text-align: center; font-size: 12px;">Fertilidad del Suelo</h4>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: green; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Alta (80-100%)
+        </p>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: yellow; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Media (60-79%)
+        </p>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: orange; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Baja (40-59%)
+        </p>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: red; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Muy Baja (<40%)
+        </p>
+    </div>
+    '''
+    return legend_html
+
+def crear_leyenda_recomendaciones():
+    """Crea leyenda para mapa de recomendaciones"""
+    legend_html = '''
+    <div style="
+        position: fixed; 
+        bottom: 50px; 
+        left: 50px; 
+        width: 200px; 
+        height: auto;
+        background-color: white; 
+        border: 2px solid grey; 
+        z-index: 9999;
+        font-size: 11px;
+        padding: 10px;
+        border-radius: 5px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        font-family: Arial, sans-serif;
+    ">
+        <h4 style="margin: 0 0 8px 0; text-align: center; font-size: 12px;">Recomendaciones NPK</h4>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: blue; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Sin Fertilización
+        </p>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: green; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Fertilización Leve
+        </p>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: orange; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Fertilización Moderada
+        </p>
+        <p style="margin: 4px 0; display: flex; align-items: center;">
+            <span style="background: red; width: 15px; height: 15px; display: inline-block; margin-right: 5px; border: 1px solid black;"></span>
+            Fertilización Intensiva
+        </p>
+    </div>
+    '''
+    return legend_html
+
 def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
-    """Crea mapa de fertilidad por sublotes con leyenda mejorada"""
+    """Crea mapa de fertilidad por sublotes con leyenda correcta"""
     try:
         gdf = gpd.GeoDataFrame.from_features(geojson_sublotes["features"])
         centro = [gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()]
@@ -545,29 +590,8 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
                     popup=folium.Popup(popup_text, max_width=300)
                 ).add_to(m)
         
-        # Leyenda mejorada - Fertilidad
-        legend_html = '''
-        <div class="legend-container">
-            <div class="legend-title">Fertilidad del Suelo</div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: green;"></span>
-                <span>Alta (80-100%)</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: yellow;"></span>
-                <span>Media (60-79%)</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: orange;"></span>
-                <span>Baja (40-59%)</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: red;"></span>
-                <span>Muy Baja (<40%)</span>
-            </div>
-        </div>
-        '''
-        m.get_root().html.add_child(folium.Element(legend_html))
+        # Agregar leyenda
+        m.get_root().html.add_child(folium.Element(crear_leyenda_fertilidad()))
         
         folium.LayerControl().add_to(m)
         return m
@@ -577,7 +601,7 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
         return folium.Map(location=[-34.6037, -58.3816], zoom_start=4)
 
 def crear_mapa_recomendaciones(geojson_sublotes, resultados_sublotes):
-    """Crea mapa de recomendaciones NPK con leyenda mejorada"""
+    """Crea mapa de recomendaciones NPK con leyenda correcta"""
     try:
         gdf = gpd.GeoDataFrame.from_features(geojson_sublotes["features"])
         centro = [gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()]
@@ -628,29 +652,8 @@ def crear_mapa_recomendaciones(geojson_sublotes, resultados_sublotes):
                     popup=folium.Popup(popup_text, max_width=300)
                 ).add_to(m)
         
-        # Leyenda mejorada - Recomendaciones
-        legend_html = '''
-        <div class="legend-container">
-            <div class="legend-title">Recomendaciones NPK</div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: blue;"></span>
-                <span>Sin Fertilización</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: green;"></span>
-                <span>Fertilización Leve</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: orange;"></span>
-                <span>Fertilización Moderada</span>
-            </div>
-            <div class="legend-item">
-                <span class="legend-color" style="background: red;"></span>
-                <span>Fertilización Intensiva</span>
-            </div>
-        </div>
-        '''
-        m.get_root().html.add_child(folium.Element(legend_html))
+        # Agregar leyenda
+        m.get_root().html.add_child(folium.Element(crear_leyenda_recomendaciones()))
         
         folium.LayerControl().add_to(m)
         return m
