@@ -544,11 +544,17 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
         
         m = folium.Map(location=centro, zoom_start=13)
         
-        # Capa base
+        # Capa base - OpenStreetMap por defecto
+        folium.TileLayer(
+            'OpenStreetMap',
+            name='OpenStreetMap'
+        ).add_to(m)
+        
+        # Capa satelital de Esri
         folium.TileLayer(
             'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
             attr='Esri',
-            name='Satélite'
+            name='Esri Satélite'
         ).add_to(m)
         
         # Colores para categorías de fertilidad
@@ -601,17 +607,24 @@ def crear_mapa_fertilidad(geojson_sublotes, resultados_sublotes):
         return folium.Map(location=[-34.6037, -58.3816], zoom_start=4)
 
 def crear_mapa_recomendaciones(geojson_sublotes, resultados_sublotes):
-    """Crea mapa de recomendaciones NPK con leyenda correcta"""
+    """Crea mapa de recomendaciones NPK con leyenda correcta y capa satelital"""
     try:
         gdf = gpd.GeoDataFrame.from_features(geojson_sublotes["features"])
         centro = [gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()]
         
         m = folium.Map(location=centro, zoom_start=13)
         
-        # Capa base
+        # Capa base - OpenStreetMap por defecto
         folium.TileLayer(
             'OpenStreetMap',
             name='OpenStreetMap'
+        ).add_to(m)
+        
+        # Capa satelital de Esri - AGREGADA AL MAPA DE RECOMENDACIONES
+        folium.TileLayer(
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri',
+            name='Esri Satélite'
         ).add_to(m)
         
         # Colores para categorías de recomendación
@@ -961,7 +974,7 @@ def main():
                 folium.TileLayer(
                     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                     attr='Esri',
-                    name='Satélite'
+                    name='Esri Satélite'
                 ).add_to(m)
                 
                 folium.GeoJson(st.session_state.geojson_data).add_to(m)
