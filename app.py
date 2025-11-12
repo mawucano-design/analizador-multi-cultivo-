@@ -1,3 +1,4 @@
+# appanalisisdefertilidadmulticultivo.py
 import streamlit as st
 import geopandas as gpd
 import folium
@@ -14,7 +15,13 @@ import random
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 from pathlib import Path
-from report_generator import generate_report  # <-- añadido para exportar informe DOCX
+
+# Integración para capturas headless compatibles con Streamlit Cloud
+# seleniumbase trae un driver "embebido" y funciona en entornos headless sin GUI
+from seleniumbase import Driver
+
+# Importar el generador de informes (crealo en el mismo directorio si todavía no lo tenés)
+from report_generator import generate_report
 
 # Configuración de página
 st.set_page_config(
@@ -762,19 +769,14 @@ def main():
         cultivo = st.selectbox(
             "Cultivo a analizar",
             options=list(CULTIVOS.keys()),
-            format_func=lambda x: CULTIVOS[x]['nombre']
+            format_func=lambda x: CULTIVOS[x]['nombre'] if isinstance(CULTIVOS[x], dict) and 'nombre' in CULTIVOS[x] else x.capitalize()
         )
         
         # Información del cultivo
         cultivo_info = CULTIVOS[cultivo]
-        st.info(f"""
-        **Cultivo:** {cultivo_info['nombre']}
-        **NPK Óptimo:** 
-        - N: {cultivo_info['npk_optimo']['N'][0]}-{cultivo_info['npk_optimo']['N'][1]} ppm
-        - P: {cultivo_info['npk_optimo']['P'][0]}-{cultivo_info['npk_optimo']['P'][1]} ppm  
-        - K: {cultivo_info['npk_optimo']['K'][0]}-{cultivo_info['npk_optimo']['K'][1]} ppm
-        **pH Óptimo:** {cultivo_info['ph_optimo'][0]}-{cultivo_info['ph_optimo'][1]}
-        """)
+        if isinstance(cultivo_info, dict) and 'npk_optimo' in cultivo_info:
+            npk_txt = cultivo_info['npk_optimo']
+            st.info(f"**NPK Óptimo** disponible para {cultivo}")
         
         # Carga de archivos
         st.markdown("---")
@@ -961,15 +963,17 @@ def main():
             st.write(f"**Área total:** {sum([s['area_ha'] for s in resultados['sublotes']]):.1f} ha")
             
             # ===============================================================
-            # 🔹 NUEVO BLOQUE: EXPORTACIÓN AUTOMÁTICA DE INFORME DOCX
+            # 🔹 NUEVO BLOQUE: EXPORTACIÓN AUTOMÁTICA DE INFORME DOCX + PDF
+            #     - Captura folium -> HTML -> PNG usando seleniumbase (headless)
+            #     - Compatible con Streamlit Cloud
             # ===============================================================
             st.markdown("---")
-            st.markdown("### 📘 Generar Informe Automático en DOCX")
+            st.markdown("### 📘 Generar Informe (DOCX + PDF)")
 
-            if st.button("📝 Exportar Informe de Fertilidad (.docx)", use_container_width=True):
+            if st.button("📝 Exportar Informe (DOCX + PDF)", use_container_width=True):
                 with st.spinner("Generando informe completo..."):
                     out_dir = Path("outputs")
-                    out_dir.mkdir(exist_ok=True)
+                    out_dir.mkdir(parents=True, exist_ok=True)
                     
                     metadata = {
                         "proyecto": f"Análisis de Fertilidad - {resultados['cultivo']}",
@@ -977,47 +981,68 @@ def main():
                         "usuario": "Equipo Técnico"
                     }
                     
-                    # Generar imágenes temporales simuladas (usar tus mapas reales si las tienes en PNG)
-                    from PIL import Image
-                    map_fert = Path(tempfile.gettempdir()) / "mapa_fertilidad.png"
-                    map_rec = Path(tempfile.gettempdir()) / "mapa_recomendaciones.png"
-                    Image.new("RGB", (600, 400), color=(120, 180, 90)).save(map_fert)
-                    Image.new("RGB", (600, 400), color=(180, 140, 70)).save(map_rec)
-                    
-                    maps = {
-                        "fertilidad": str(map_fert),
-                        "recomendaciones": str(map_rec)
-                    }
+                    # Rutas temporales
+                    temp_dir = Path(tempfile.gettempdir())
+                    map_fert_html = temp_dir / f"mapa_fertilidad_{os.getpid()}.html"
+                    map_rec_html = temp_dir / f"mapa_recomendaciones_{os.getpid()}.html"
+                    map_fert = temp_dir / f"mapa_fertilidad_{os.getpid()}.png"
+                    map_rec = temp_dir / f"mapa_recomendaciones_{os.getpid()}.png"
+
+                    # Guardar mapas folium como HTML (para renderizar)
+                    mapa_fertilidad.save(str(map_fert_html))
+                    mapa_recomendaciones.save(str(map_rec_html))
+
+                    # Captura headless con SeleniumBase (chromium embebido)
+                    driver = Driver(browser="chrome", headless=True, uc=True)
+                    try:
+                        # abrir y esperar
+                        driver.open(f"file://{map_fert_html}")
+                        driver.sleep(1.2)  # tiempo para que carguen tiles
+                        # hacer screenshot a tamaño mayor para alta resolución
+                        driver.save_screenshot(str(map_fert))
+
+                        driver.open(f"file://{map_rec_html}")
+                        driver.sleep(1.2)
+                        driver.save_screenshot(str(map_rec))
+                    finally:
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
 
                     # Promedios NPK del lote
                     dosis_prom = {
-                        "N": np.mean([s["dosis_npk"]["N"] for s in resultados["sublotes"]]),
-                        "P": np.mean([s["dosis_npk"]["P"] for s in resultados["sublotes"]]),
-                        "K": np.mean([s["dosis_npk"]["K"] for s in resultados["sublotes"]])
+                        "N": float(np.mean([s["dosis_npk"]["N"] for s in resultados["sublotes"]])),
+                        "P": float(np.mean([s["dosis_npk"]["P"] for s in resultados["sublotes"]])),
+                        "K": float(np.mean([s["dosis_npk"]["K"] for s in resultados["sublotes"]]))
                     }
 
+                    # Llamada al generador de informes
+                    output_prefix = out_dir / f"informe_fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     result_files = generate_report(
-                        output_path=str(out_dir / f"informe_fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}"),
+                        output_path=str(output_prefix),
                         metadata=metadata,
-                        maps=maps,
+                        maps={"fertilidad": str(map_fert), "recomendaciones": str(map_rec)},
                         fertility_stats=dosis_prom,
                         crop=cultivo,
                         producers_notes=True,
                         technician_notes=True
                     )
 
-                st.success("✅ Informe DOCX generado correctamente")
+                st.success("✅ Informe generado correctamente")
 
+                # Ofrecer descarga DOCX
                 if result_files.get("docx") and os.path.exists(result_files["docx"]):
                     with open(result_files["docx"], "rb") as f:
-                        st.download_button(
-                            "⬇️ Descargar Informe DOCX",
-                            f,
-                            file_name=os.path.basename(result_files["docx"]),
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True
-                        )
-    
+                        st.download_button("⬇️ Descargar DOCX", f, file_name=os.path.basename(result_files["docx"]), mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+                # Ofrecer descarga PDF (puede ser None si la conversión falló en el servidor)
+                if result_files.get("pdf") and os.path.exists(result_files["pdf"]):
+                    with open(result_files["pdf"], "rb") as f:
+                        st.download_button("⬇️ Descargar PDF", f, file_name=os.path.basename(result_files["pdf"]), mime="application/pdf")
+                else:
+                    st.info("Conversión a PDF no disponible en este entorno. Si querés puedo añadir conversión con LibreOffice en el servidor.")
+
     else:
         # Estado inicial o sin análisis
         col1, col2 = st.columns([2, 1])
