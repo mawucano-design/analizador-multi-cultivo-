@@ -13,6 +13,8 @@ import pandas as pd
 import random
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
+from pathlib import Path
+from report_generator import generate_report  # <-- añadido para exportar informe DOCX
 
 # Configuración de página
 st.set_page_config(
@@ -957,6 +959,64 @@ def main():
             st.write(f"**Cuadrícula:** {filas} filas × {columnas} columnas")
             st.write(f"**Sublotes analizados:** {len(resultados['sublotes'])}")
             st.write(f"**Área total:** {sum([s['area_ha'] for s in resultados['sublotes']]):.1f} ha")
+            
+            # ===============================================================
+            # 🔹 NUEVO BLOQUE: EXPORTACIÓN AUTOMÁTICA DE INFORME DOCX
+            # ===============================================================
+            st.markdown("---")
+            st.markdown("### 📘 Generar Informe Automático en DOCX")
+
+            if st.button("📝 Exportar Informe de Fertilidad (.docx)", use_container_width=True):
+                with st.spinner("Generando informe completo..."):
+                    out_dir = Path("outputs")
+                    out_dir.mkdir(exist_ok=True)
+                    
+                    metadata = {
+                        "proyecto": f"Análisis de Fertilidad - {resultados['cultivo']}",
+                        "fecha": datetime.now().strftime("%Y-%m-%d"),
+                        "usuario": "Equipo Técnico"
+                    }
+                    
+                    # Generar imágenes temporales simuladas (usar tus mapas reales si las tienes en PNG)
+                    from PIL import Image
+                    map_fert = Path(tempfile.gettempdir()) / "mapa_fertilidad.png"
+                    map_rec = Path(tempfile.gettempdir()) / "mapa_recomendaciones.png"
+                    Image.new("RGB", (600, 400), color=(120, 180, 90)).save(map_fert)
+                    Image.new("RGB", (600, 400), color=(180, 140, 70)).save(map_rec)
+                    
+                    maps = {
+                        "fertilidad": str(map_fert),
+                        "recomendaciones": str(map_rec)
+                    }
+
+                    # Promedios NPK del lote
+                    dosis_prom = {
+                        "N": np.mean([s["dosis_npk"]["N"] for s in resultados["sublotes"]]),
+                        "P": np.mean([s["dosis_npk"]["P"] for s in resultados["sublotes"]]),
+                        "K": np.mean([s["dosis_npk"]["K"] for s in resultados["sublotes"]])
+                    }
+
+                    result_files = generate_report(
+                        output_path=str(out_dir / f"informe_fertilidad_{cultivo}_{datetime.now().strftime('%Y%m%d_%H%M')}"),
+                        metadata=metadata,
+                        maps=maps,
+                        fertility_stats=dosis_prom,
+                        crop=cultivo,
+                        producers_notes=True,
+                        technician_notes=True
+                    )
+
+                st.success("✅ Informe DOCX generado correctamente")
+
+                if result_files.get("docx") and os.path.exists(result_files["docx"]):
+                    with open(result_files["docx"], "rb") as f:
+                        st.download_button(
+                            "⬇️ Descargar Informe DOCX",
+                            f,
+                            file_name=os.path.basename(result_files["docx"]),
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True
+                        )
     
     else:
         # Estado inicial o sin análisis
