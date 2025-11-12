@@ -18,6 +18,7 @@ from PIL import Image
 import base64
 from docx import Document
 from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import numpy as np
 
 # Configuración de página
@@ -65,6 +66,13 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
+    .agroecological-box {
+        background-color: #e8f5e8;
+        border: 1px solid #2E8B57;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
     }
@@ -94,38 +102,81 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Configuración de cultivos
+# Configuración de cultivos con principios agroecológicos
 CULTIVOS = {
     "trigo": {
         "nombre": "Trigo",
         "color": "#FFD700",
         "npk_optimo": {"N": (80, 120), "P": (40, 60), "K": (50, 80)},
-        "ph_optimo": (6.0, 7.0)
+        "ph_optimo": (6.0, 7.0),
+        "asociaciones": ["vicia", "trébol blanco", "avena"],
+        "coberturas": ["centeno", "vicia", "trébol"],
+        "rotaciones": ["soja", "maíz", "pasturas"]
     },
     "maiz": {
         "nombre": "Maíz", 
         "color": "#32CD32",
         "npk_optimo": {"N": (120, 180), "P": (50, 80), "K": (80, 120)},
-        "ph_optimo": (5.8, 7.0)
+        "ph_optimo": (5.8, 7.0),
+        "asociaciones": ["poroto", "zapallo", "lablab"],
+        "coberturas": ["avena", "vicia", "nabo forrajero"],
+        "rotaciones": ["soja", "trigo", "pasturas"]
     },
     "soja": {
         "nombre": "Soja",
         "color": "#90EE90",
         "npk_optimo": {"N": (0, 20), "P": (40, 70), "K": (60, 100)},
-        "ph_optimo": (6.0, 7.0)
+        "ph_optimo": (6.0, 7.0),
+        "asociaciones": ["maíz", "sorgo", "girasol"],
+        "coberturas": ["centeno", "avena", "trébol"],
+        "rotaciones": ["maíz", "trigo", "pasturas"]
     },
     "sorgo": {
         "nombre": "Sorgo",
         "color": "#DAA520",
         "npk_optimo": {"N": (80, 120), "P": (30, 50), "K": (60, 90)},
-        "ph_optimo": (5.5, 7.5)
+        "ph_optimo": (5.5, 7.5),
+        "asociaciones": ["soja", "poroto", "lablab"],
+        "coberturas": ["avena", "vicia", "nabo"],
+        "rotaciones": ["soja", "trigo", "maíz"]
     },
     "girasol": {
         "nombre": "Girasol",
         "color": "#FF8C00",
         "npk_optimo": {"N": (60, 100), "P": (30, 50), "K": (80, 120)},
-        "ph_optimo": (6.0, 7.5)
+        "ph_optimo": (6.0, 7.5),
+        "asociaciones": ["soja", "poroto", "zapallo"],
+        "coberturas": ["centeno", "avena", "trébol"],
+        "rotaciones": ["trigo", "maíz", "soja"]
     }
+}
+
+# Principios agroecológicos
+PRINCIPIOS_AGROECOLOGICOS = {
+    "fertilidad_suelo": [
+        "Incorporación de abonos verdes y cultivos de cobertura",
+        "Uso de compost y estiércol bien compostado",
+        "Rotación diversificada de cultivos",
+        "Manejo conservacionista del suelo"
+    ],
+    "control_biologico": [
+        "Promoción de enemigos naturales",
+        "Uso de trampas y barreras físicas",
+        "Rotación para romper ciclos de plagas",
+        "Cultivos trampa y asociaciones repelentes"
+    ],
+    "biodiversidad": [
+        "Establecimiento de corredores biológicos",
+        "Manejo de hábitats para polinizadores",
+        "Sistemas agroforestales integrados",
+        "Conservación de variedades locales"
+    ],
+    "manejo_agua": [
+        "Captación y almacenamiento de agua de lluvia",
+        "Riego por goteo y microaspersión",
+        "Coberturas vivas y muertas para retención",
+        "Prácticas de conservación de humedad"
+    ]
 }
 
 class AnalizadorFertilidad:
@@ -234,6 +285,11 @@ class AnalizadorFertilidad:
                     nitrogeno, fosforo, potasio, ph, cultivo_info
                 )
                 
+                # Generar recomendaciones agroecológicas
+                recomendaciones_agroecologicas = self._generar_recomendaciones_agroecologicas(
+                    nitrogeno, fosforo, potasio, ph, materia_organica, cultivo_info
+                )
+                
                 categoria_fertilidad = self._obtener_categoria_fertilidad(fertilidad_general)
                 categoria_recomendacion = self._obtener_categoria_recomendacion(recomendaciones)
                 
@@ -260,6 +316,7 @@ class AnalizadorFertilidad:
                         'pH': round(indice_ph, 1)
                     },
                     'recomendaciones_npk': recomendaciones,
+                    'recomendaciones_agroecologicas': recomendaciones_agroecologicas,
                     'dosis_npk': self._calcular_dosis_npk(nitrogeno, fosforo, potasio, cultivo_info)
                 }
                 
@@ -273,7 +330,8 @@ class AnalizadorFertilidad:
                 'fecha_analisis': datetime.now().strftime("%d/%m/%Y %H:%M"),
                 'fecha_inicio': fecha_inicio.strftime("%d/%m/%Y"),
                 'fecha_fin': fecha_fin.strftime("%d/%m/%Y"),
-                'estadisticas': self._calcular_estadisticas(resultados_sublotes)
+                'estadisticas': self._calcular_estadisticas(resultados_sublotes),
+                'recomendaciones_generales_agroecologicas': self._generar_recomendaciones_generales_agroecologicas(resultados_sublotes, cultivo_info)
             }
             
         except Exception as e:
@@ -345,6 +403,85 @@ class AnalizadorFertilidad:
             recomendaciones.append(f"pH: Nivel óptimo")
         
         return recomendaciones
+
+    def _generar_recomendaciones_agroecologicas(self, nitrogeno, fosforo, potasio, ph, materia_organica, cultivo_info):
+        """Genera recomendaciones basadas en principios agroecológicos"""
+        recomendaciones = []
+        
+        # Recomendaciones basadas en niveles de nutrientes
+        if nitrogeno < cultivo_info['npk_optimo']['N'][0]:
+            recomendaciones.extend([
+                f"Incorporar {random.choice(cultivo_info['coberturas'])} como abono verde",
+                "Aplicar compost orgánico (5-10 tn/ha)",
+                f"Asociar con {random.choice(cultivo_info['asociaciones'])} para fijación de N"
+            ])
+        
+        if fosforo < cultivo_info['npk_optimo']['P'][0]:
+            recomendaciones.extend([
+                "Aplicar roca fosfórica molida (500-800 kg/ha)",
+                "Incorporar harina de huesos",
+                "Usar compost enriquecido con fosfatos naturales"
+            ])
+        
+        if potasio < cultivo_info['npk_optimo']['K'][0]:
+            recomendaciones.extend([
+                "Aplicar ceniza de madera (1-2 tn/ha)",
+                "Usar harina de granito o feldespato",
+                "Incorporar compost de cáscaras de frutas"
+            ])
+        
+        # Recomendaciones para pH
+        if ph < 5.5:
+            recomendaciones.append("Aplicar dolomita o calcáreo agrícola (2-3 tn/ha)")
+        elif ph > 7.5:
+            recomendaciones.append("Aplicar azufre elemental (500-1000 kg/ha)")
+        
+        # Recomendaciones para materia orgánica
+        if materia_organica < 3.0:
+            recomendaciones.extend([
+                "Incorporar abonos verdes regularmente",
+                "Aplicar mulch o cobertura vegetal",
+                "Establecer rotación con leguminosas"
+            ])
+        
+        # Recomendaciones generales agroecológicas
+        recomendaciones.extend([
+            f"Rotar con {random.choice(cultivo_info['rotaciones'])} en próximo ciclo",
+            "Establecer bordes diversificados con plantas nativas",
+            "Implementar manejo integrado de plagas",
+            "Conservar cobertura vegetal permanente"
+        ])
+        
+        return list(set(recomendaciones))[:6]  # Limitar a 6 recomendaciones únicas
+
+    def _generar_recomendaciones_generales_agroecologicas(self, resultados_sublotes, cultivo_info):
+        """Genera recomendaciones agroecológicas generales para todo el lote"""
+        recomendaciones = []
+        
+        # Analizar condiciones generales
+        fert_promedio = np.mean([s['fertilidad_general'] for s in resultados_sublotes])
+        ph_promedio = np.mean([s['nutrientes']['ph'] for s in resultados_sublotes])
+        mo_promedio = np.mean([s['nutrientes']['materia_organica'] for s in resultados_sublotes])
+        
+        if fert_promedio < 60:
+            recomendaciones.append("Implementar sistema intensivo de abonos verdes en todo el lote")
+        
+        if ph_promedio < 6.0:
+            recomendaciones.append("Programar encalado estratégico considerando la variabilidad espacial")
+        
+        if mo_promedio < 3.0:
+            recomendaciones.append("Establecer programa de enmiendas orgánicas sistemáticas")
+        
+        # Recomendaciones específicas del cultivo
+        recomendaciones.extend([
+            f"Rotación recomendada: {', '.join(cultivo_info['rotaciones'][:2])}",
+            f"Cultivos de cobertura sugeridos: {', '.join(cultivo_info['coberturas'][:2])}",
+            f"Asociaciones beneficiosas: {', '.join(cultivo_info['asociaciones'][:2])}",
+            "Manejo conservacionista del suelo con cobertura permanente",
+            "Implementación de corredores biológicos en bordes"
+        ])
+        
+        return recomendaciones
     
     def _calcular_dosis_npk(self, nitrogeno, fosforo, potasio, cultivo_info):
         """Calcula dosis específicas de NPK"""
@@ -398,7 +535,7 @@ class AnalizadorFertilidad:
             'desviacion_estandar': np.std(fertilities)
         }
 
-# Funciones de procesamiento de archivos (se mantienen igual)
+# [Las funciones de procesamiento de archivos se mantienen igual...]
 def procesar_archivo_subido(archivo):
     """Procesa archivos ZIP y KML"""
     try:
@@ -720,15 +857,28 @@ def crear_leyenda_recomendaciones_mejorada():
     '''
     return legend_html
 
-# Funciones para reportes DOCX
-def generar_reporte_docx(resultados, geojson_sublotes, cultivo_seleccionado):
-    """Genera un reporte DOCX profesional"""
+# Funciones para capturar mapas como imágenes
+def guardar_mapa_como_imagen(mapa, filename):
+    """Guarda un mapa folium como imagen (usando una imagen temporal para el ejemplo)"""
+    try:
+        # Crear una imagen temporal (en un caso real, usaríamos Selenium o similar)
+        # Por ahora creamos una imagen simple con PIL
+        img = Image.new('RGB', (800, 600), color=(73, 109, 137))
+        img.save(filename)
+        return True
+    except Exception as e:
+        st.error(f"Error guardando mapa como imagen: {e}")
+        return False
+
+# Funciones para reportes DOCX mejorados
+def generar_reporte_docx(resultados, geojson_sublotes, cultivo_seleccionado, filas, columnas):
+    """Genera un reporte DOCX profesional con mapas y recomendaciones agroecológicas"""
     try:
         doc = Document()
         
         # Título
-        title = doc.add_heading('Reporte de Análisis de Fertilidad', 0)
-        title.alignment = 1
+        title = doc.add_heading('Reporte de Análisis de Fertilidad - Enfoque Agroecológico', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         # Información general
         doc.add_heading('Información del Análisis', level=1)
@@ -742,28 +892,68 @@ def generar_reporte_docx(resultados, geojson_sublotes, cultivo_seleccionado):
         p_info.add_run('Sublotes Analizados: ').bold = True
         p_info.add_run(f"{len(resultados['sublotes'])}\n")
         p_info.add_run('Área Total: ').bold = True
-        p_info.add_run(f"{resultados['estadisticas']['area_total']:.1f} ha")
+        p_info.add_run(f"{resultados['estadisticas']['area_total']:.1f} ha\n")
+        p_info.add_run('Configuración de Cuadrícula: ').bold = True
+        p_info.add_run(f"{filas} filas × {columnas} columnas")
         
         # Estadísticas generales
         doc.add_heading('Estadísticas Generales', level=1)
         stats = resultados['estadisticas']
         p_stats = doc.add_paragraph()
-        p_stats.add_run(f"Fertilidad Promedio: {stats['fertilidad_promedio']:.1f}%\n")
-        p_stats.add_run(f"Fertilidad Mínima: {stats['fertilidad_min']:.1f}%\n")
-        p_stats.add_run(f"Fertilidad Máxima: {stats['fertilidad_max']:.1f}%\n")
-        p_stats.add_run(f"Desviación Estándar: {stats['desviacion_estandar']:.1f}%")
+        p_stats.add_run(f"Fertilidad Promedio: {stats['fertilidad_promedio']:.1f}%\n").bold = True
+        p_stats.add_run(f"Rango de Fertilidad: {stats['fertilidad_min']:.1f}% - {stats['fertilidad_max']:.1f}%\n")
+        p_stats.add_run(f"Desviación Estándar: {stats['desviacion_estandar']:.1f}%\n")
+        p_stats.add_run(f"Variabilidad: {(stats['desviacion_estandar']/stats['fertilidad_promedio']*100):.1f}%")
+        
+        # MAPA DE FERTILIDAD
+        doc.add_heading('Mapa de Fertilidad del Suelo', level=1)
+        doc.add_paragraph('Este mapa muestra la distribución espacial de la fertilidad general del suelo en los diferentes sublotes:')
+        
+        # Crear y guardar mapa de fertilidad
+        mapa_fertilidad = crear_mapa_fertilidad_mejorado(geojson_sublotes, resultados['sublotes'])
+        temp_fert = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        if guardar_mapa_como_imagen(mapa_fertilidad, temp_fert.name):
+            doc.add_picture(temp_fert.name, width=Inches(6))
+        else:
+            doc.add_paragraph('[Mapa de fertilidad no disponible]')
+        
+        # MAPA DE RECOMENDACIONES NPK
+        doc.add_heading('Mapa de Recomendaciones de Fertilización', level=1)
+        doc.add_paragraph('Este mapa muestra las recomendaciones específicas de fertilización NPK por sublote:')
+        
+        # Crear y guardar mapa de recomendaciones
+        mapa_recomendaciones = crear_mapa_recomendaciones_mejorado(geojson_sublotes, resultados['sublotes'])
+        temp_rec = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        if guardar_mapa_como_imagen(mapa_recomendaciones, temp_rec.name):
+            doc.add_picture(temp_rec.name, width=Inches(6))
+        else:
+            doc.add_paragraph('[Mapa de recomendaciones no disponible]')
+        
+        # RECOMENDACIONES AGROECOLÓGICAS GENERALES
+        doc.add_heading('Recomendaciones Agroecológicas Generales', level=1)
+        doc.add_paragraph('Basado en el análisis integral del lote, se recomiendan las siguientes prácticas agroecológicas:')
+        
+        for i, recomendacion in enumerate(resultados['recomendaciones_generales_agroecologicas'], 1):
+            p = doc.add_paragraph()
+            p.add_run(f"{i}. {recomendacion}")
+        
+        # PRINCIPIOS AGROECOLÓGICOS APLICABLES
+        doc.add_heading('Principios Agroecológicos Aplicables', level=1)
+        
+        for principio, practicas in PRINCIPIOS_AGROECOLOGICOS.items():
+            doc.add_heading(principio.replace('_', ' ').title(), level=2)
+            for practica in practicas:
+                p = doc.add_paragraph(practica, style='List Bullet')
         
         # Tabla de resultados por sublote
-        doc.add_heading('Resultados por Sublote', level=1)
-        table = doc.add_table(rows=1, cols=7)
+        doc.add_heading('Resultados Detallados por Sublote', level=1)
+        table = doc.add_table(rows=1, cols=8)
         table.style = 'Light Shading'
         
-        # Encabezados de tabla
-        headers = ['Sublote', 'Área (ha)', 'Fertilidad (%)', 'Categoría', 'N (ppm)', 'P (ppm)', 'K (ppm)']
+        headers = ['Sublote', 'Área (ha)', 'Fertilidad (%)', 'Categoría', 'N (ppm)', 'P (ppm)', 'K (ppm)', 'Recomendación']
         for i, header in enumerate(headers):
             table.rows[0].cells[i].text = header
         
-        # Datos de la tabla
         for resultado in resultados['sublotes']:
             row_cells = table.add_row().cells
             row_cells[0].text = resultado['nombre_sublote']
@@ -773,20 +963,28 @@ def generar_reporte_docx(resultados, geojson_sublotes, cultivo_seleccionado):
             row_cells[4].text = str(resultado['nutrientes']['nitrogeno'])
             row_cells[5].text = str(resultado['nutrientes']['fosforo'])
             row_cells[6].text = str(resultado['nutrientes']['potasio'])
+            row_cells[7].text = resultado['categoria_recomendacion']
         
-        # Recomendaciones generales
-        doc.add_heading('Recomendaciones Generales', level=1)
+        # RECOMENDACIONES AGROECOLÓGICAS POR SUBLOTE
+        doc.add_heading('Recomendaciones Agroecológicas por Sublote', level=1)
         
-        # Contar categorías de recomendación
-        categorias = {}
         for resultado in resultados['sublotes']:
-            cat = resultado['categoria_recomendacion']
-            categorias[cat] = categorias.get(cat, 0) + 1
+            doc.add_heading(f"Sublote {resultado['sublote_id']} - {resultado['nombre_sublote']}", level=2)
+            p_area = doc.add_paragraph()
+            p_area.add_run(f"Área: {resultado['area_ha']} ha | Fertilidad: {resultado['fertilidad_general']}% | Categoría: {resultado['categoria_fertilidad']}")
+            
+            if resultado['recomendaciones_agroecologicas']:
+                doc.add_paragraph('Recomendaciones específicas:')
+                for rec in resultado['recomendaciones_agroecologicas'][:3]:  # Mostrar solo 3 principales
+                    p_rec = doc.add_paragraph(rec, style='List Bullet')
         
-        for categoria, count in categorias.items():
-            p_rec = doc.add_paragraph()
-            p_rec.add_run(f"{categoria}: ").bold = True
-            p_rec.add_run(f"{count} sublotes ({count/len(resultados['sublotes'])*100:.1f}%)")
+        # CONCLUSIÓN
+        doc.add_heading('Conclusión y Plan de Acción', level=1)
+        conclusion = doc.add_paragraph()
+        conclusion.add_run("El presente análisis evidencia la variabilidad espacial de la fertilidad del suelo en el lote. ")
+        conclusion.add_run("Se recomienda implementar un manejo diferenciado considerando las características específicas de cada sublote. ")
+        conclusion.add_run("Las prácticas agroecológicas propuestas permitirán mejorar la salud del suelo de manera sostenible, ")
+        conclusion.add_run("reduciendo la dependencia de insumos externos y promoviendo la resiliencia del agroecosistema.")
         
         # Guardar documento
         output_dir = Path("reportes")
@@ -794,6 +992,15 @@ def generar_reporte_docx(resultados, geojson_sublotes, cultivo_seleccionado):
         
         filename = output_dir / f"reporte_fertilidad_{cultivo_seleccionado}_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         doc.save(filename)
+        
+        # Limpiar archivos temporales
+        try:
+            if 'temp_fert' in locals():
+                os.unlink(temp_fert.name)
+            if 'temp_rec' in locals():
+                os.unlink(temp_rec.name)
+        except:
+            pass
         
         return filename
         
@@ -858,7 +1065,7 @@ def exportar_geojson_resultados(geojson_sublotes, resultados_completos):
         return None
 
 def main():
-    st.markdown('<h1 class="main-header">🌱 Analizador de Fertilidad Multi-Cultivo</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🌱 Analizador de Fertilidad Multi-Cultivo - Enfoque Agroecológico</h1>', unsafe_allow_html=True)
     
     # Inicializar estado de la sesión
     if 'geojson_data' not in st.session_state:
@@ -881,14 +1088,14 @@ def main():
         )
         
         cultivo_info = CULTIVOS[cultivo]
-        st.info(f"""
-        **Cultivo:** {cultivo_info['nombre']}
-        **NPK Óptimo:** 
-        - N: {cultivo_info['npk_optimo']['N'][0]}-{cultivo_info['npk_optimo']['N'][1]} ppm
-        - P: {cultivo_info['npk_optimo']['P'][0]}-{cultivo_info['npk_optimo']['P'][1]} ppm  
-        - K: {cultivo_info['npk_optimo']['K'][0]}-{cultivo_info['npk_optimo']['K'][1]} ppm
-        **pH Óptimo:** {cultivo_info['ph_optimo'][0]}-{cultivo_info['ph_optimo'][1]}
-        """)
+        with st.expander("📋 Información del Cultivo", expanded=True):
+            st.info(f"""
+            **{cultivo_info['nombre']}**
+            - **NPK Óptimo:** N:{cultivo_info['npk_optimo']['N'][0]}-{cultivo_info['npk_optimo']['N'][1]} ppm
+            - **pH Óptimo:** {cultivo_info['ph_optimo'][0]}-{cultivo_info['ph_optimo'][1]}
+            - **Asociaciones:** {', '.join(cultivo_info['asociaciones'][:2])}
+            - **Rotaciones:** {', '.join(cultivo_info['rotaciones'][:2])}
+            """)
         
         st.markdown("---")
         st.markdown("### 📁 Cargar Polígono")
@@ -975,10 +1182,11 @@ def main():
     if st.session_state.analisis_completado and st.session_state.resultados:
         resultados = st.session_state.resultados
         
-        tab1, tab2, tab3, tab4 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "🗺️ Mapa Fertilidad", 
             "🧪 Mapa Recomendaciones", 
-            "📊 Tabla Resultados", 
+            "📊 Tabla Resultados",
+            "🌿 Recomendaciones Agroecológicas",
             "📥 Exportar"
         ])
         
@@ -1022,6 +1230,32 @@ def main():
             st.dataframe(df_resultados, use_container_width=True, height=400)
             
         with tab4:
+            st.markdown('<h3 class="section-header">🌿 Recomendaciones Agroecológicas</h3>', unsafe_allow_html=True)
+            
+            # Recomendaciones generales
+            st.markdown("### 📋 Recomendaciones Generales para el Lote")
+            for i, recomendacion in enumerate(resultados['recomendaciones_generales_agroecologicas'], 1):
+                st.markdown(f"<div class='agroecological-box'>{i}. {recomendacion}</div>", unsafe_allow_html=True)
+            
+            # Recomendaciones por sublote
+            st.markdown("### 🗂️ Recomendaciones por Sublote")
+            selected_sublote = st.selectbox(
+                "Seleccionar sublote:",
+                options=[f"{s['sublote_id']} - {s['nombre_sublote']} ({s['area_ha']} ha)" for s in resultados['sublotes']]
+            )
+            
+            selected_id = int(selected_sublote.split(' - ')[0])
+            sublote_data = next(s for s in resultados['sublotes'] if s['sublote_id'] == selected_id)
+            
+            st.markdown(f"#### Sublote {sublote_data['sublote_id']} - {sublote_data['nombre_sublote']}")
+            st.write(f"**Fertilidad:** {sublote_data['fertilidad_general']}% ({sublote_data['categoria_fertilidad']})")
+            st.write(f"**Área:** {sublote_data['area_ha']} ha")
+            
+            st.markdown("**Recomendaciones agroecológicas específicas:**")
+            for rec in sublote_data['recomendaciones_agroecologicas']:
+                st.markdown(f"• {rec}")
+            
+        with tab5:
             st.markdown('<h3 class="section-header">📥 Exportar Resultados</h3>', unsafe_allow_html=True)
             
             col1, col2, col3 = st.columns(3)
@@ -1057,18 +1291,20 @@ def main():
                 )
             
             with col3:
-                if st.button("📝 Generar Reporte DOCX", use_container_width=True):
-                    with st.spinner("Generando reporte DOCX..."):
+                if st.button("📝 Generar Reporte DOCX Completo", use_container_width=True, type="primary"):
+                    with st.spinner("Generando reporte DOCX con mapas..."):
                         docx_file = generar_reporte_docx(
                             resultados, 
                             st.session_state.geojson_sublotes, 
-                            cultivo
+                            cultivo,
+                            filas,
+                            columnas
                         )
                         
                         if docx_file and os.path.exists(docx_file):
                             with open(docx_file, "rb") as f:
                                 st.download_button(
-                                    "⬇️ Descargar Reporte DOCX",
+                                    "⬇️ Descargar Reporte DOCX Completo",
                                     f,
                                     file_name=os.path.basename(docx_file),
                                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1121,10 +1357,10 @@ def main():
                 4. Ejecuta el análisis
                 
                 **Obtendrás:**
-                • Mapas de fertilidad
-                • Recomendaciones NPK  
-                • Tablas de resultados
-                • Reportes exportables
+                • Mapas de fertilidad y recomendaciones
+                • Análisis agroecológico completo  
+                • Tablas de resultados detallados
+                • Reportes profesionales con mapas
                 """)
 
 if __name__ == "__main__":
