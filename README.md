@@ -1,23 +1,40 @@
-# 🌱 Analizador Multi-Cultivo
+🌴 Analizador de Cultivos con Sentinel-2
+Aplicación web para análisis agrícola avanzado usando Google Earth Engine y Sentinel-2 Harmonizada.
 
-Aplicación web para el análisis de cultivos utilizando datos geoespaciales y métricas de vegetación.
+🚀 Características Principales
+🛰️ Datos reales de Sentinel-2 Harmonizada
 
-## 🚀 Características
+🌿 Análisis de nutrientes NPK basado en modelos científicos
 
-- **Análisis multi-cultivo** (Trigo, Maíz, Soja, Sorgo, Girasol)
-- **Visualización interactiva** de lotes agrícolas
-- **Métricas de salud** vegetal (NDVI, biomasa estimada)
-- **Recomendaciones automáticas** basadas en el estado del cultivo
-- **Interfaz intuitiva** y fácil de usar
+🗺️ Mapas interactivos con visualizaciones impactantes
 
-## 🛠️ Instalación
+📊 Recomendaciones agroecológicas específicas por cultivo
+
+📄 Generación de informes PDF automáticos
+
+🎯 Cultivos Soportados
+Maíz
+
+Trigo
+
+Soja
+
+Sorgo
+
+Girasol
+
+Colza
+
+Lupino
+## ⚡ Instalación Rápida
 
 ```bash
-# Clonar el repositorio
-git clone https://github.com/tu-usuario/analizador-multi-cultivo.git
+# Clonar repositorio
+git clone https://github.com/tuusuario/analizador-cultivos-sentinel2.git
+cd analizador-cultivos-sentinel2
 
 # Instalar dependencias
 pip install -r requirements.txt
 
-# Ejecutar la aplicación
-streamlit run app.py
+# Ejecutar aplicación
+agtechmulticultivo.streamlit.app/
